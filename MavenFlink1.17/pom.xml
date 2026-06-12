@@ -2,9 +2,13 @@
   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>org.example</groupId>
+  <parent>
+    <groupId>org.example</groupId>
+    <artifactId>BigData</artifactId>
+    <version>1.0-SNAPSHOT</version>
+  </parent>
+
   <artifactId>Flink1.17</artifactId>
-  <version>1.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>Flink1.17</name>
@@ -17,46 +21,28 @@
   </properties>
 
   <dependencies>
-    <!-- Source: https://mvnrepository.com/artifact/org.junit.jupiter/junit-jupiter-api -->
-    <dependency>
-      <groupId>org.junit.jupiter</groupId>
-      <artifactId>junit-jupiter-api</artifactId>
-      <version>5.5.0</version>
-      <scope>test</scope>
-    </dependency>
-    <!-- Source: https://mvnrepository.com/artifact/org.apache.flink/flink-clients -->
+    <!-- Flink 核心依赖（从父工程继承版本） -->
     <dependency>
       <groupId>org.apache.flink</groupId>
       <artifactId>flink-clients</artifactId>
-      <version>1.17.1</version>
-      <scope>compile</scope>
     </dependency>
-    <!-- Source: https://mvnrepository.com/artifact/org.apache.flink/flink-streaming-java -->
     <dependency>
       <groupId>org.apache.flink</groupId>
       <artifactId>flink-streaming-java</artifactId>
-      <version>1.17.1</version>
-      <scope>compile</scope>
     </dependency>
-    <!-- Source: https://mvnrepository.com/artifact/org.apache.flink/flink-java -->
     <dependency>
       <groupId>org.apache.flink</groupId>
       <artifactId>flink-java</artifactId>
-      <version>1.17.1</version>
-      <scope>compile</scope>
     </dependency>
-    <!-- Source: https://mvnrepository.com/artifact/org.apache.flink/flink-connector-files -->
     <dependency>
       <groupId>org.apache.flink</groupId>
       <artifactId>flink-connector-files</artifactId>
-      <version>1.17.1</version>
-      <scope>compile</scope>
     </dependency>
     <dependency>
       <groupId>org.apache.flink</groupId>
       <artifactId>flink-runtime-web</artifactId>
-      <version>1.17.1</version>
-      <scope>compile</scope>
     </dependency>
+    
+    <!-- JUnit 测试依赖（从父工程继承，已在父 POM 中声明） -->
   </dependencies>
 </project>

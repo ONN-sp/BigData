@@ -183,7 +183,7 @@
 63. 默认的slot共享组是"default"，如果未指定slot共享组，那么所有子任务都会被分配到"default"组中，此时所有算子操作都是一个slot共享组
 64. <mark>流程序中最大算子并行度=运行所需要的slot数量</mark>
 65. 并行度和slots数量的关系；
-    * slows是一种静态的概念，表示最大的处理并发上限
+    * slots是一种静态的概念，表示最大的处理并发上限
     * 并行度是一种动态的概念，表示实际运行占用了几个
     * <mark>要求：slot数量>=job并行度（算子最大并行度），job才能运行，不然运行失败(这是standalone模式)。如果是YARN模式，它会自动根据提交的job的并行度，来申请taskManager的数量（申请规则：taskManager的数量=job并行度/slot数量，向上取整）</mark>
     ![img.png](并行度和slots数量.png)
