@@ -4,6 +4,7 @@ package org.example;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.RestOptions;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -12,10 +13,13 @@ import org.apache.flink.util.Collector;
 public class WordCountStreamUnboundDemo {
     public static void main(String[] args) throws Exception {
         // 创建执行环境
-//        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+//        Configuration conf = new Configuration();
+//        conf.set(RestOptions.BIND_PORT, "8082");// 自定义IDEA本地拉取的Flink 集群的端口
+//        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         // IDEA运行时，也可以看到webui，用于本地测试，此时需要引入flink-runtime-web依赖
         // 在IDEA运行时，不指定并行度，默认就是电脑的线程数
-        StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironmentWithWebUI(new Configuration());
+//        StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironmentWithWebUI(new Configuration());
         // 读取数据 socket，通过端口模拟无界数据流的输入
         DataStreamSource<String> socketDS = env.socketTextStream("localhost", 7777).setParallelism(1);
         // 处理数据：切分（切分成一个一个单词）、转换（转换为二元组）、分组（一样的单词一组分组）、聚合（一个组内按照个数聚合）
