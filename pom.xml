@@ -49,6 +49,16 @@
         <artifactId>flink-runtime-web</artifactId>
         <version>${flink.version}</version>
       </dependency>
+      <dependency>
+        <groupId>org.apache.flink</groupId>
+        <artifactId>flink-connector-kafka</artifactId>
+        <version>${flink.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.flink</groupId>
+        <artifactId>flink-connector-datagen</artifactId>
+        <version>${flink.version}</version>
+      </dependency>
       
       <!-- Spark 核心依赖 -->
       <dependency>
