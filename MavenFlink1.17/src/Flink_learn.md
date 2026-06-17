@@ -207,7 +207,7 @@
     ![img.png](Standalone会话模式提交流程.png)（逻辑流图到作业流图最重要的就是进行算子链优化；jobmaster把作业流图转换为执行图）
 73. YARN应用模式作业提交流程：
     ![img.png](YARN应用模式提交作业流程.png)
-74. DataStream API代码由以下几部分组成：
+74. <mark>`DataStream` API代码由以下几部分组成：</mark> 
     ![img.png](Flink代码.png)
 75. DataStream API：
     * 创建执行环境：`StreamExecutionEnvironment.getExecutionEnvironment()`：自动识别是远程集群还是本地IDEA环境，可以通过`new Configuration()`来指定：
@@ -215,7 +215,8 @@
     * Flink流批一体，代码api是一套，默认是流处理，设置为批处理：`env.setRuntimeMode(RuntimeExecutionMode.BATCH);`；批处理设置也可以在命令行提交作业时指定：`-Dexecution.runtime-mode=BATCH`
     * 最后一定要有一个程序的触发执行，前面其实只是定义了作业的每个执行操作，然后添加到数据流图中，这时并没有真正处理数据——因为数据可能还没来，只有等到数据到来，才会从触发真正的计算，这也被称为“延迟执行”：`env.execute();`
     * 默认`env.execute`触发一个flink job，一个main方法可以调用多个execute，但是没意义，指定到第一个就会阻塞住；`env.executeAsync();`表示异步触发，不阻塞，此时一个main方法里面`env.executeAsync();`的个数=生成的flink job(一个flink job对应一个jobmaster)数
-76. <mark>源算子（Source）：Flink 中 Source 是数据流的起点，负责读取外部数据并生成 DataStream：</mark>
+76. <mark>注意`DataStream`内只能是相同的数据类型，可以是`自定义统一POJO、Tuple、Sting、Integer`等。而`ConnectedStreams<T1, T2>`：持有两条不同类型流，支持各自处理，不属于同一条`DataStream`</mark>
+77. <mark>源算子（Source）：Flink 中 Source 是数据流的起点，负责读取外部数据并生成 DataStream：</mark>
     * 从Flink1.13开始，主要使用流批统一的Source架构：`DataStreamSource<String> stream = env.fromSource(...)`，即都会注册一个Source，并返回一个`DataStreamSource`对象
       * 从集合中读取：`env.fromCollection(Arrays.asList(1, 2, 3, 4, 5));`；`env.fromElements(1, 2, 3, 4, 5);`，这也是注册Source
         * 从文件中读取：`env.readTextFile("path/to/file");`但是从Flink1.13开始就弃了，改用:`FileSource+env.fromSource()`
@@ -274,12 +275,12 @@
     datagen.print();
     ```
     ![img.png](数据生成器source.png)
-77. <mark>内存中的对象，无法直接在网络上传输，必须经历「序列化→传输→反序列化」的过程。原因：</mark>
+78. <mark>内存中的对象，无法直接在网络上传输，必须经历「序列化→传输→反序列化」的过程。原因：</mark>
       * 网络只能传输「字节流」，一连串的二进制，不能传输「对象」（代码里创建的 User、String、自定义对象，在 JVM 里是内存中的数据结构： 包含对象头、实例数据、引用指针，这些结构是 JVM 私有的，其他进程 / 机器完全无法识别）
       * 跨平台 / 跨语言通信需要统一格式
       * 持久化存储也需要序列化：不仅是网络传输，把对象写入文件、数据库，同样需要序列
-78. Flink支持的数据类型是`TypeInformation`类型，其中包含了常见使用的类型，比如`Types.STRING`、`Types.INT`、`Types.LONG`等
-79. <mark>Flink中自定义实体类作为数据流传输对象，满足一套规定规则的普通java bean，称作`POJO`。Flink会为`POJO`生成专用序列化器，性能远高于`GenericTypeInformation（ Kryo 序列化）`，推荐业务实体全部使用`POJO`。`POJO`必须同时满足：</mark>
+79. Flink支持的数据类型是`TypeInformation`类型，其中包含了常见使用的类型，比如`Types.STRING`、`Types.INT`、`Types.LONG`等
+80. <mark>Flink中自定义实体类作为数据流传输对象，满足一套规定规则的普通java bean，称作`POJO`。Flink会为`POJO`生成专用序列化器，性能远高于`GenericTypeInformation（ Kryo 序列化）`，推荐业务实体全部使用`POJO`。`POJO`必须同时满足：</mark>
     * 类是public
     * 有无参公共构造函数
     * 所有字段属性必须是public，或提供public getter/setter
@@ -311,11 +312,15 @@
     public void setAge(Integer age) { this.age = age; }
     }
     ```
-80. <mark>Flink的基本转换算子：</mark>
+81. <mark>Flink的基本转换算子：</mark>
     * `map`：就是一个一一映射，消费一个元素就产出一个元素
     * `filter`：转换操作，对数据流执行一个过滤，通过一个布尔条件表达式设置过滤条件，对于每一个流内元素进行判断，若为true则元素正常输出，若为false则元素被过滤掉
     * `flatMap`：压平操作，主要是将数据流中的整体(一般是集合类型)拆分成一个一个的个体使用。消费一个元素，可以产生0到多个元素，使用`out.collect`采集器传到下游，flatmap就是通过采集器来控制一进多出的。它是flatten和map的结合
-81. <mark>Flink的聚合算子：对于Flink而言，DataStream是没有直接进行聚合的API的。因为我们对海量数据做聚合肯定要进行分区并行处理，这样才能提高效率。所以在Flink中，要做聚合，需要先进行分区，即keyBy：</mark>
+82. <mark>Flink中流的转换关系：</mark>
+    *  Source 生成的初始流都是`DataStream`，`DataStreamSource`继承于`SingleOutputStreamOperator`，而后者继承于`DataStream`；经过转换算子（`map`、`filter`、`flatMap`等）得到的仍然是`DataStream`
+    * `DataStream`在`keyBy()`后得到`KeyedStream`键控流（`ConnectedStream`在`keyBy()`后得到的是`ConnectedStream`），分组后做`reduce、window、sum`等操作得到的还是`DataStream`
+    * `DataStream`在`connect()`后得到`ConnectedStream`后，此时对`ConnectedStream`进行转换算子（`map`、`filter`、`flatMap`等），得到的还是`DataStream`
+83. <mark>Flink的聚合算子：对于Flink而言，DataStream是没有直接进行聚合的API的。因为我们对海量数据做聚合肯定要进行分区并行处理，这样才能提高效率。所以在Flink中，要做聚合，需要先进行分区，即keyBy：</mark>
     * `keyBy`：聚合前必须要用的一个算子，通过指定key可以将一条流从逻辑上划分成不同的组。然后相同组在一个分区，这里的分区，其实就是并行处理的子任务。基于不同的key，流中的数据将被分配到不同的分组中，相同的key在同一个分区。keyBy返回的是一个KeyedStream，键控流；keyBy不是转换算子，只是对数据进行重分区，不能设置并行度
     ```txt
     keyBy分组与分区的区别：
@@ -334,8 +339,8 @@
     ```
     * 简单聚合(分组内聚合)：基于`KeyedStream`的`sum`、`max`、`min`、`avg`、`count`等，也就是对`keyBy()`得到的分组进行简单聚合操作。在Flink中简单聚合算子需要和`keyBy()`成对出现
     * `reduce`：还是要跟在`keyBy()`之后。它是两两聚合，并且对输入类型=输出类型。对于`keyBy()`得到的每组数据的第一条不会进入`reduce`方法，会存起来，等下一条数据来时，再进行聚合操作；再有下一条同组数据来时，就是对上一条聚合结果（体现了flink的有状态计算）和下一条数据进行聚合操作
-82. <mark>需要注意：算子物理分区数（数据传输通道对应的分区） = 该算子子任务数 = 算子并行度：对于一条算子链上的算子来说：算子并行度=该算子的子任务总数量，上下游之间传输数据的物理分区通道数量=下游算子并行度（子任务数）；而对于`keyBy()`它有一个逻辑分区的概念，由于`keyBy()`后的分组数可以大于下游分区数（下游算子并行度/子任务数），因此可以多个逻辑分组在一个物理分区（多个逻辑分组在一个子任务中执行）</mark>
-83. 富函数：RichXXXFunction。普通函数（MapFunction、FilterFunction、SinkFunction 等）只提供处理数据的方法，而富函数（Rich 开头） 是普通接口(MapFunction、FilterFunction、SinkFunction 等)的增强实现类：`RichMapFunction / RichFilterFunction / RichFlatMapFunction / RichSourceFunction / RichSinkFunction`等，它是每一个算子都提供了的。富函数多了生命周期管理方法和运行时上下文：
+84. <mark>需要注意：算子物理分区数（数据传输通道对应的分区） = 该算子子任务数 = 算子并行度：对于一条算子链上的算子来说：算子并行度=该算子的子任务总数量，上下游之间传输数据的物理分区通道数量=下游算子并行度（子任务数）；而对于`keyBy()`它有一个逻辑分区的概念，由于`keyBy()`后的分组数可以大于下游分区数（下游算子并行度/子任务数），因此可以多个逻辑分组在一个物理分区（多个逻辑分组在一个子任务中执行）</mark>
+85. 富函数：RichXXXFunction。普通函数（MapFunction、FilterFunction、SinkFunction 等）只提供处理数据的方法，而富函数（Rich 开头） 是普通接口(MapFunction、FilterFunction、SinkFunction 等)的增强实现类：`RichMapFunction / RichFilterFunction / RichFlatMapFunction / RichSourceFunction / RichSinkFunction`等，它是每一个算子都提供了的。富函数多了生命周期管理方法和运行时上下文：
     * `open()`：每个子任务，在启动时，调用一次，且只调用一次
     * `close()`：每个子任务，在结束时，调用一次，且只调用一次。如果是flink程序异常退出，不会调用close；如果是正常调用cancel命令，会调用close
     * 多了运行时上下文 RuntimeContext获取：通过 `getRuntimeContext()` 获取，普通函数拿不到。可以获取当前子任务编号、并行度、任务名称，算子状态 / KeyedState 操作
@@ -347,9 +352,9 @@
     ValueState<Long> countState = ctx.getState(new ValueStateDescriptor<>("cnt", Long.class));
     ```
     ![img.png](富函数.png)
-84. 分区(一个子任务，可以理解为一个分区，这和kafka的分区不是一个概念哈)算子：所有算子都是重分区算子，会划分出新的task
+86. <mark>分区(一个子任务，可以理解为一个分区，这和kafka的分区不是一个概念哈)算子：所有算子都是重分区算子，会划分出新的task。在flink中，如果下游算子并行度为n，那么当前算子的每一条输出数据只会路由到下游其中一个子任务，路由规则由当前算子的数据分发策略决定，分发策略如下：</mark>
     * `shuffle()`：随机分区，每一条数据都有机会被分配到任意一个分区中，然后每个子任务执行自己的数据
-    * `rebalance()`：轮询分区，将数据挨个分配到分区中，然后每个子任务执行自己的数据
+    * `rebalance()`：轮询分区，将数据挨个分配到分区中，然后每个子任务执行自己的数据（这是默认方式，无 keyBy 的算子默认策略）
     * `rescale()`：缩放轮询分区，将数据根据分区数进行缩放，然后每个子任务执行自己的数据，如：
     ```txt
     集群共 2 台机器 TM1、TM2
@@ -391,3 +396,193 @@
     }
     ```
     ![img.png](自定义分区器.png)(奇偶数据的分区不同，即在不同的下游子任务中运行)
+87. <mark>`process()`算子不是单一方法，是底层通用处理API(process() 是 Flink 底层万能处理入口，普通流用 ProcessFunction，分组流用 KeyedProcessFunction)，所有转换算子底层最终都基于Process系列函数实现（map/filter/flatMap/window/keyBy 底层封装的都是 Process），其优势：</mark>
+    * 相比 map/filter 只能处理单条数据，Process 函数可以拿到 上下文 Context，具备四大独有能力：
+      * 获取当前数据时间（处理时间 / 事件时间）
+      * 注册定时器（Timer，延迟触发逻辑）
+      * 读写键控状态 State
+      * 侧输出流 SideOutput 分流
+    * 分为两大类：
+      * 无key普通流：`ProcessFunction`：适用于没有分组的普通流，不能使用键控状态、不能注册定时器，只能做基础处理 + 侧输出
+      ```java
+      /**
+      * value:当前流入的单条数据
+      * ctx:上下文，包含当前数据的时间、key等信息
+      * out:输出收集器，主流输出
+      **/
+      SingleOutputStreamOperator<WaterSensor> process = sensorDS.process(new ProcessFunction<WaterSensor, WaterSensor>() {
+            @Override
+            public void processElement(WaterSensor value, Context ctx, Collector<WaterSensor> out) throws Exception {
+                String id = value.getId();
+                if ("s1".equals(id)) {
+                    // 如果是s1，放到测输出流s1中
+                    ctx.output(s1Tag, value);// 把当前这条数据，输出到独立的侧输出流s1Tag中，而不是主流
+                } else if ("s2".equals(id)) {
+                    // 如果是s2，放到测输出流s2中
+                    ctx.output(s2Tag, value);
+                } else {
+                    // 如果是s3，放到主流中
+                    out.collect(value);
+                }
+            }
+      });
+      ```
+      * keyBy键控流：`KeyedProcessFunction`(`keyBy()`之后的流)：keyBy 分组后专用，支持状态 + 定时器 + 上下文 + 侧输出，开发复杂业务首选
+      ```java
+      KeyedStream<String, String> keyStream = stream.keyBy(s -> s);
+      keyStream.process(new KeyedProcessFunction<String, String, String>() {
+      // 生命周期初始化（富函数能力）
+         @Override
+          public void open(Configuration parameters) {
+            // 注册状态
+            countState = getRuntimeContext().getState(new ValueStateDescriptor<>("cnt", Long.class));
+          }
+          // 每条数据进来必执行的核心方法
+          @Override
+          public void processElement(String value, Context ctx, Collector<String> out) throws Exception {
+            // 1. 获取当前key
+            String currentKey = ctx.getCurrentKey();
+            // 2. 读写键控状态
+            Long cnt = countState.value() == null ? 0 : countState.value();
+            countState.update(cnt + 1);
+            out.collect(currentKey + " 累计：" + (cnt + 1));
+    
+            // 3. 注册处理时间定时器（5秒后触发onTimer）
+            long fiveSecLater = ctx.timerService().currentProcessingTime() + 5000;
+            ctx.timerService().registerProcessingTimeTimer(fiveSecLater);
+          }
+    
+          // 定时器触发回调：注册的时间到达后执行
+          @Override
+          public void onTimer(long timestamp, OnTimerContext ctx, Collector<String> out) throws Exception {
+            // 定时器触发时，依然能拿到当前key、读写状态
+            String key = ctx.getCurrentKey();
+            out.collect("定时器触发，key=" + key + "，时间戳：" + timestamp);
+            // 可清空状态、输出延迟数据、做过期清理
+            countState.clear();
+          }
+      });
+      ```
+    * 对于`processElement`直接输出的是主流，如果要获取测流需要使用`process.getSideOutput(...)`，前提是在`processElement()`中把数据分流到了独立的测输出流`ctx.output(标签, 数据)`
+    * `process()`算子是最灵活的，逻辑都是自己写的
+88. 分流：将一条数据流拆分成完全独立的两条、甚至多条流。也即是基于一个DataStream，定义一些筛选条件，将符合条件的数据筛选出来放到对应的流里
+    * `filter`可以实现，缺点：同一个数据要被处理两遍，也就是同一个数据要在不同流中都要判断，效率低
+    * 测输出流：需要调用上下文ctx的`.output()`方法，就可以输出任意类型的数据了。而测输出流的标记和提取，都离不开一个“输出标签”，指定了测输出流的id和类型
+89. 合流：
+    * 联合`.union()`算子：最简单的合理操作就是直接将多条流合在一起，叫做流的“联合”。联合操作要求必须流中的数据类型必须相同，合并之后的新流会包括所有流中的元素，数据类型不变。`union`算子一次可以合并多条流：链式或者逗号分隔都可以
+    * `connect()`算子：允许流的数据类型不同。`connect`不能一次合并多条流。此时得到的是一个`ConnectedStreams`对象，连接流对象可以看成是两条流形式上的“统一”，被放在了一个同一个流中；事实上内部仍保持各自的数据形式不变，彼此之间是相互独立的。
+      要想得到新的`DataStream`，可以进一步定义一个“同处理”转换操作（如`CoMapFunction`），用于说明对于不同source、不同类型的数据，怎样分别进行处理转换，得到统一的输出类型。整体来看，`ConnectedStream`中的两条流可以保持各自的数据类型、处理方式也可以不同，最终
+      会统一到一个类型的`DataStream`中
+    ![img.png](connectedStream.png)
+    ```java
+    ConnectedStreams<Integer, String> connect = source1.connect(source2);
+    SingleOutputStreamOperator<String> map = connect.map(new CoMapFunction<Integer, String, String>() {
+        @Override
+        public String map1(Integer value) {
+            return value.toString();
+        }
+        @Override
+        public String map2(String value) {
+            return value;
+        }
+    });
+    ```
+    * 合并两条流，根据id字段进行匹配，利用`ConnectedStreams`对象的`keyBy()`方法：
+    ```java
+    DataStreamSource<Tuple2<Integer, String>> source1 = env.fromElements(
+                Tuple2.of(1, "a1"),
+                Tuple2.of(1, "a2"),
+                Tuple2.of(2, "b"),
+                Tuple2.of(3, "c"),
+                Tuple2.of(4, "d"),
+                Tuple2.of(5, "e")
+                );
+        DataStreamSource<Tuple3<Integer, String, Integer>> source2 = env.fromElements(
+                Tuple3.of(1, "aa1", 1),
+                Tuple3.of(1, "aa2", 2),
+                Tuple3.of(2, "bb1", 1),
+                Tuple3.of(3, "cc1", 1),
+                Tuple3.of(4, "dd1", 1),
+                Tuple3.of(5, "ee1", 1)
+        );
+        ConnectedStreams<Tuple2<Integer, String>, Tuple3<Integer, String, Integer>> connect = source1.connect(source2).keyBy(s1 -> s1.f0, s2 -> s2.f0);
+        /**
+         * 实现互相匹配的效果：
+         * 1、两条流不一定谁的数据先来
+         * 2、每条流，有数据来就先存到一个变量中
+         *      hashmap
+         *      =>key=id，第一个字段值
+         *      =>value=List<数据><
+         * 3、每条流有数据来的时候，除了存变量中，不知道对方是否有匹配的数据，要去另一条流存到变量查找是否有匹配上的数据
+         */
+        SingleOutputStreamOperator<Object> process = connect.process(new CoProcessFunction<Tuple2<Integer, String>, Tuple3<Integer, String, Integer>, Object>() {
+            // 定义hashmap用来存数据
+            Map<Integer, List<Tuple2<Integer, String>>> s1Cache = new HashMap<>();
+            Map<Integer, List<Tuple3<Integer, String, Integer>>> s2Cache = new HashMap<>();
+
+            /**
+             * 第一条流的处理逻辑
+             * @param value The stream element
+             * @param ctx A {@link Context} that allows querying the timestamp of the element, querying the
+             *     {@link TimeDomain} of the firing timer and getting a {@link TimerService} for registering
+             *     timers and querying the time. The context is only valid during the invocation of this
+             *     method, do not store it.
+             * @param out The collector to emit resulting elements to
+             * @throws Exception
+             */
+            @Override
+            public void processElement1(Tuple2<Integer, String> value, CoProcessFunction<Tuple2<Integer, String>, Tuple3<Integer, String, Integer>, Object>.Context ctx, Collector<Object> out) throws Exception {
+                Integer id = value.f0;
+                // s1的数据来录就存到变量中
+                if (!s1Cache.containsKey(id)) {
+                    List<Tuple2<Integer, String>> s1Values = new ArrayList<>();
+                    s1Values.add(value);
+                    s1Cache.put(id, s1Values);
+                } else {
+                    // key存在，不是该key的第一条数据，直接添加到s1Cache中
+                    s1Cache.get(id).add(value);
+                }
+                // 去s2Cache中查找是否有id能匹配上的，匹配就输出，没有就不输出
+                if (s2Cache.containsKey(id)) {
+                    List<Tuple3<Integer, String, Integer>> s2Values = s2Cache.get(id);
+                    for (Tuple3<Integer, String, Integer> s2Value : s2Values) {
+                        out.collect("s1:" + value + "<=======>" + "s2:" + s2Value);
+                    }
+                }
+            }
+
+            /**
+             * 第二条流的处理逻辑
+             * @param value The stream element
+             * @param ctx A {@link Context} that allows querying the timestamp of the element, querying the
+             *     {@link TimeDomain} of the firing timer and getting a {@link TimerService} for registering
+             *     timers and querying the time. The context is only valid during the invocation of this
+             *     method, do not store it.
+             * @param out The collector to emit resulting elements to
+             * @throws Exception
+             */
+            @Override
+            public void processElement2(Tuple3<Integer, String, Integer> value, CoProcessFunction<Tuple2<Integer, String>, Tuple3<Integer, String, Integer>, Object>.Context ctx, Collector<Object> out) throws Exception {
+                Integer id = value.f0;
+                // s2的数据来录就存到变量中
+                if (!s2Cache.containsKey(id)) {
+                    List<Tuple3<Integer, String, Integer>> s2Values = new ArrayList<>();
+                    s2Values.add(value);
+                    s2Cache.put(id, s2Values);
+                } else {
+                    // key存在，不是该key的第一条数据，直接添加到s1Cache中
+                    s2Cache.get(id).add(value);
+                }
+                // 去s1Cache中查找是否有id能匹配上的，匹配就输出，没有就不输出
+                if (s1Cache.containsKey(id)) {
+                    List<Tuple2<Integer, String>> s1Values = s1Cache.get(id);
+                    for (Tuple2<Integer, String> s1Value : s1Values) {
+                        out.collect("s1:" + s1Value + "<=======>" + "s2:" + value);
+                    }
+                }
+            }
+        });
+    ```
+90. `DataStream`：数据流；`KeyedStream`：键控流；`ConnectedStream`：连接流
+91. 输出算子(`sink`)：
+    * `print`：打印输出
