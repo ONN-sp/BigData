@@ -50,7 +50,16 @@
       <groupId>org.apache.flink</groupId>
       <artifactId>flink-connector-kafka</artifactId>
     </dependency>
-    
+    <dependency>
+      <groupId>org.apache.flink</groupId>
+      <artifactId>flink-connector-jdbc</artifactId>
+    </dependency>
+
+    <!-- MySQL 核心依赖（从父工程继承版本） -->
+    <dependency>
+      <groupId>mysql</groupId>
+      <artifactId>mysql-connector-java</artifactId>
+    </dependency>
     <!-- JUnit 测试依赖（从父工程继承，已在父 POM 中声明） -->
   </dependencies>
 </project>

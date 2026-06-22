@@ -8,8 +8,9 @@
     6.Replication:每一个分区都有多个副本，副本的作用是做备胎。当主分区（Leader）故障的 时候会选择一个备胎（Follower）上位，成为Leader
     7.Consumer Group
     ```
-2. kafka实例（一个实例通常就是一个broker，多个broker组成集群）作为中间的消息队列，让上下游服务完全解耦，并且对于下游消费者可以根据不同的消费者组进行负载均衡。对于生产者发送的消息是有类别的，每一个消息类对应一个topic，而每一个topic对应多个分区，每个分区是有序的，分区可以在不同的broker上，即实现分布式存储。每一个分区可以有多个副本，也就是follwer，实现高可用性
-3. kfaka原理:
+2. <mark>Kafka 每条消息底层结构天然是 Key + Value，但 Key 允许为空，不是必须填，可以是null，value必须填字节数组，也就是消息主体。当key=null时，消息会轮询分发到所有可用分区，此时不能保证同一业务数据进入同一分区，而key的作用就是：相同 key 经过哈希后一定会落到同一个分区，实现数据分组（比如用户 ID 作为 key，同一用户数据进同一分区）</mark>
+3. kafka实例（一个实例通常就是一个broker，多个broker组成集群）作为中间的消息队列，让上下游服务完全解耦，并且对于下游消费者可以根据不同的消费者组进行负载均衡。对于生产者发送的消息是有类别的，每一个消息类对应一个topic，而每一个topic对应多个分区，每个分区是有序的，分区可以在不同的broker上，即实现分布式存储。每一个分区可以有多个副本，也就是follwer，实现高可用性
+4. kfaka原理:
    * Producer：Producer即生产者，消息的产生者，是消息的⼊口。
    * kafka cluster：kafka集群，一台或多台服务器组成
      - Broker：Broker是指部署了Kafka实例的服务器节点。每个服务器上有一个或多个kafka的实例，我们姑且认为每个broker对应一台服务器。每个kafka集群内的broker都有一个不重复的 编号，如图中的broker-0、broker-1等……
@@ -18,36 +19,40 @@
      - Replication:每一个分区都有多个副本，副本的作用是做备胎。当主分区（Leader）故障的 时候会选择一个备胎（Follower）上位，成为Leader。在kafka中默认副本的最大数量是10 个，且副本的数量不能大于Broker的数量，follower和leader绝对是在不同的机器，同一机 器对同一个分区也只可能存放一个副本（包括自己）。
    * Consumer：消费者，即消息的消费方，是消息的出口。
    * Consumer Group：我们可以将多个消费组组成一个消费者组，在kafka的设计中同一个分 区的数据只能被消费者组中的某一个消费者消费。同一个消费者组的消费者可以消费同一个 topic的不同分区的数据，这也是为了提高kafka的吞吐量
-4. kafka保证高性能、高吞吐的关键
+5. 选择partition分区的原则
+   - partition在被写入的时候(即生产者发送消息时)可以指定需要写入的partition(通过指定分区编号实现)，如果有指定，则写入对应的partition
+   - 如果没有指定partition，但是设置了数据的key，则会根据key的值hash出一个partition（类似redis的哈希槽）,相同的key会在一个partition里面。这是kafka默认分区策略
+   - 如果既没指定partition，又没有设置key，则会采用轮询方式，即每次取一小段时间的数据写入某个partition，下一小段的时间写入下一个partition
+6. kafka保证高性能、高吞吐的关键
    * 顺序读写，所有消息基本都是顺序追加而不是随机io
    * 页缓存：当写入消息时，数据并不是直接刷到磁盘上，而是先写入页缓存（内存一部分），因此写入速度极快
    * 批量处理：生产者会将多条消息聚合成一个批次再发送给broker，大大减少网络请求次数，提高吞吐量
    * 分区机制：一个topic的多个partition是可以并发读写
    * leader/follwer保证的是高可用
-5. kafka保证消息能消费成功的机制：
+7. kafka保证消息能消费成功的机制：
    * 发送端：
     1. ack机制（没有确认会重发），利用acks参数控制。ack=0是不等任何确认，发完就完；ack=1只等leader确认；ack=acll需要等learder和follwer都确认才行；
     2. 重试机制：设置retries>0失败时生产者会自动重试发送失败的消息，配合enable.idempotence=true开启幂等性，避免重复写入；
    * 消费端
     1. offset提交机制：通过offset记录消费进度，消费者可以手动或自动提交offset给kafka（提交的 Offset 会被存储在 Kafka 一个名为 __consumer_offsets 的内部 Topic 中），这样做的目的是消费者可以重新消费，但是这个机制有潜在问题：重复消费（消息消费成功和offset提交不是在一个原子操作中，如果offset未提交但是消息已经消费了，就可能导致重复消费）；消息丢失（如果消息消费失败但是offset提交了，就会导致这条消息丢失）
-6. acks机制（broker端不丢消息）：这是生产者端的配置，用于控制消息发送的可靠性级别
+8. acks机制（broker端不丢消息）：这是生产者端的配置，用于控制消息发送的可靠性级别
    * acks=0:不等待任何确认，生产者发送完消息后立即认为成功，不等待服务器响应（可能丢失消息）
    * acks=1:等待leader确认。只要leader成功写入消息，生产者就收到成功响应（如果leader在同步副本前崩溃，消息可能丢失，因为leader确认后就不会重发了）
    * acks=all或acks=-1:等待leader/follwer均确认，才返回成功（可靠性最高，但是延迟会增加，吞吐下降）
-7. 消费者组的不同消费者是可以并行的
-8. 一般消费就是：一个消费者组里的消费者各自独占若干个分区去串行消费消息，单个消费者消费分区是串行的，但是不同消费者消费不同分区时是并行的
-9. <mark>kafka的Sequence Number（序列号）：Sequence Number 是生产给每一条消息分配的单调递增本地序列号，由生产者自己维护，不是 broker 生成，broker生成的是partition的offset。每个生产者客户端（KafkaProducer）针对同一个主题分区维护一个单调递增的 sequence 序列号，用来实现幂等生产者 Idempotent Producer，解决重复发送消息问题</mark>
-10. <mark>Kafka 幂等生产者完全由生产者端开启，Broker 只做配合校验。生产者幂等性只能解决：同一生产者、同一分区、重试发同一条消息 → 去重</mark>
-11. <mark>一条消息要实现幂等去重，靠 3 个标识联合判断：</mark>
+9. 消费者组的不同消费者是可以并行的
+10. 一般消费就是：一个消费者组里的消费者各自独占若干个分区去串行消费消息，单个消费者消费分区是串行的，但是不同消费者消费不同分区时是并行的
+11. <mark>kafka的Sequence Number（序列号）：Sequence Number 是生产给每一条消息分配的单调递增本地序列号，由生产者自己维护，不是 broker 生成，broker生成的是partition的offset。每个生产者客户端（KafkaProducer）针对同一个主题分区维护一个单调递增的 sequence 序列号，用来实现幂等生产者 Idempotent Producer，解决重复发送消息问题</mark>
+12. <mark>Kafka 幂等生产者完全由生产者端开启，Broker 只做配合校验。生产者幂等性只能解决：同一生产者、同一分区、重试发同一条消息 → 去重</mark>
+13. <mark>一条消息要实现幂等去重，靠 3 个标识联合判断：</mark>
      * PID（Producer ID）：TC 分配给 transactional.id 的生产者/broker分配PID（非事务）
      * Partition（目标分区）
      * Sequence Number（当前分区下的自增序号）
      此时：同一个 PID + 同一个分区，如果收到相同 seq → broker 判定为重复消息，直接丢弃，不写入日志、不报错
-12. <mark>kafka事务：旨在解决分布式系统中消息一致性的问题，核心目标是：</mark>
+14. <mark>kafka事务：旨在解决分布式系统中消息一致性的问题，核心目标是：</mark>
     * 原子性：一组消息要么全部成功发送（和消费），要么全部失败，不会出现部分成功的情况
     * 一致性：确保生产者发送的消息和消费者处理的结果在分布式环境下保持一致，特别是在“生产-消费”工作流中
     * 隔离性：事务中的操作对其他生产者或消费者不可见，直到事务提交
-13. <mark>事务机制的应用场景：</mark>
+15. <mark>事务机制的应用场景：</mark>
     * 生产者事务：一个生产者需要将多条消息发送到多个 Topic/分区，确保这些消息要么全部成功，要么全部失败。例如，订单系统同时发送“订单创建”和“库存扣减”消息
     * <mark>生产者-消费者事务：消费者从一个 Topic 读取消息，处理后将结果写入另一个 Topic，确保“读取-处理-写入”是一个原子操作。例如，流处理系统从输入 Topic 读取数据，处理后写入输出 Topic；
     这是一种典型的流处理链路（消费 - 处理 - 产出）：消费Topic1消息 → 计算转换 → 写入Topic2 → 提交Topic1的offset，此时有两个致命问题：</mark>
@@ -58,11 +63,11 @@
       * 出现这两个问题的原因是：offset 存储在 Kafka 内部`__consumer_offsets`topic呢，下游数据写入业务主题，是两个独立写入操作。 幂等生产者只能保证单次发送不重复，但无法让两个不同主题的写入操作原子化
       * 因此事务就解决了这个问题
     * Exactly-Once 语义：Kafka 的事务机制与幂等性结合，可以实现“精确一次”投递（Exactly-Once Semantics，EOS），避免消息丢失或重复
-14. <mark>kafka的完整Exactly-Once依赖两大核心组件：幂等性生产者+事务，缺一不可：</mark>
+16. <mark>kafka的完整Exactly-Once依赖两大核心组件：幂等性生产者+事务，缺一不可：</mark>
     * 生产精确一次：同一生产者重试发送同一条消息，Broker 只持久化一条，不产生重复日志，依赖的是生产者幂等性
     * 消费 + 生产精确一次（流处理场景，Flink/Spark Streaming）：消费旧消息、处理、产出新消息三者要么全部成功，要么全部回滚，依赖事务
     * 纯消费精确一次：业务执行成功后再提交 offset，失败则不提交，下次重拉，配合业务幂等实现最终只处理一次
-15. <mark>kafka事务的实现原理：</mark>
+17. <mark>kafka事务的实现原理：</mark>
     * 关键组件：
       * 事务生产者（Transactional Producer）： 
         * 事务生产者通过设置 `transactional.id` 启用事务模式。每个事务生产者有一个唯一的标识，用于跟踪事务状态。
@@ -103,6 +108,6 @@
       * 隔离性：未提交的事务消息对消费者不可见（通过 isolation.level=read_committed）；控制消息（COMMIT 或 ABORT）明确标记事务边
       * 幂等性：事务生产者结合 enable.idempotence=true 和 transactional.id，确保消息不会重复写入，即使生产者重试；每个消息都有一个唯一的 Producer ID 和 Sequence Number，Broker 会检查重复消息
       * Exactly-Once 语义：事务机制与消费者组的偏移量管理结合，确保消息从生产到消费只处理一次；消费者通过 sendOffsetsToTransaction() 将偏移量与事务绑定，避免重复消费
-16. kafka事务的局限：
+18. kafka事务的局限：
     * 事务机制涉及额外的协调和日志写入（__transaction_state），会增加延迟和资源消耗
     * 建议在需要强一致性的场景中使用，避免滥用

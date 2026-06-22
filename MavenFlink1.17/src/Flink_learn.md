@@ -586,43 +586,65 @@
     ```
 91. `DataStream`：数据流；`KeyedStream`：键控流；`ConnectedStream`：连接流
 92. 输出算子(`sink`)：
-    * `print`：打印输出
-    * 输出到文件：`FileSink`：
-        * `forRowFormat`：根据行格式化输出
-        * `forBulkFormat`：根据批量格式化输出
-        * 写一些输出配置，比如：文件名前缀后缀、文件分桶、文件滚动策略等
-    * 输出到kafka：`KafkaSink`
-      * 设置kafka节点地址端口
-      * 配置发送方的序列化器，topic名称，具体的序列化方式等
-      * 配置写到kafka的一致性级别，如果是精准一次，必须：
-        * 开启chekcpoint
-        * 设置事务前缀
-        * 设置事务超时时间：checkpoint间隔时间 < 超时时间 < 最大的15分钟
-      ```java
-      env.enableCheckpointing(2000, CheckpointingMode.EXACTLY_ONCE);
+    * 内置`Sink`：`print`：打印输出
+    * 通用`Sink`：`sinkTo()`：
+      * 输出到文件：`FileSink`：
+          * `forRowFormat`：根据行格式化输出
+          * `forBulkFormat`：根据批量格式化输出
+          * 写一些输出配置，比如：文件名前缀后缀、文件分桶、文件滚动策略等
+      * 输出到kafka：`KafkaSink`
+        * 设置kafka节点地址端口
+        * 配置发送方的序列化器，topic名称，具体的序列化方式等
+        * 配置写到kafka的一致性级别，如果是精准一次，必须：
+          * 开启chekcpoint
+          * 设置事务前缀
+          * 设置事务超时时间：checkpoint间隔时间 < 超时时间 < 最大的15分钟
+        ```java
+        env.enableCheckpointing(2000, CheckpointingMode.EXACTLY_ONCE);
         DataStreamSource<String> localhost = env.socketTextStream("172.17.87.132", 7777);
-        /**
-         * 注意：如果要使用 精准一次 写入kafka，需要满足以下条件：
-         * 1、开启chekcpoint
-         * 2、设置事务前缀
-         * 3、设置事务超时时间：checkpoint间隔时间 < 超时时间 < 最大的15分钟
-         */
-        KafkaSink<String> kkSink = KafkaSink.<String>builder()
-                .setBootstrapServers("172.17.87.132:9092")
-                // 指定发送方序列化器，topic名称，具体的序列化方式
-                .setRecordSerializer(
-                        KafkaRecordSerializationSchema.<String>builder()
-                                .setTopic("ws")
-                                .setValueSerializationSchema(new SimpleStringSchema())
-                                .build()
-                )
-                // 写到kafka的一致性级别：精准一次，至少一次。如果是精确一次，必须设置事务的前缀
-                .setDeliveryGuarantee(DeliveryGuarantee.EXACTLY_ONCE)// 精准一次
-                .setTransactionalIdPrefix("bytedance-")
-                // 如果是精准一次，必须设置事务的超时时间
-                .setProperty(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, 10*60*1000+"")
-                .build();
-      localhost.sinkTo(kkSink);
-      ```
-      ![img.png](kafkasink.png)
-      
+          /**
+           * 注意：如果要使用 精准一次 写入kafka，需要满足以下条件：
+           * 1、开启chekcpoint
+           * 2、设置事务前缀
+           * 3、设置事务超时时间：checkpoint间隔时间 < 超时时间 < 最大的15分钟
+           */
+          KafkaSink<String> kkSink = KafkaSink.<String>builder()
+                  .setBootstrapServers("172.17.87.132:9092")
+                  // 指定发送方序列化器，topic名称，具体的序列化方式
+                  .setRecordSerializer(
+                          KafkaRecordSerializationSchema.<String>builder()
+                                  .setTopic("ws")
+                                  .setValueSerializationSchema(new SimpleStringSchema())
+                                  .build()
+                  )
+                  // 写到kafka的一致性级别：精准一次，至少一次。如果是精确一次，必须设置事务的前缀
+                  .setDeliveryGuarantee(DeliveryGuarantee.EXACTLY_ONCE)// 精准一次
+                  .setTransactionalIdPrefix("bytedance-")
+                  // 如果是精准一次，必须设置事务的超时时间
+                  .setProperty(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, 10*60*1000+"")
+                  .build();
+        localhost.sinkTo(kkSink);
+        ```
+        ![img.png](kafkasink.png)
+          * 可以自定义kafka中的序列化器，也就是实现`setRecordSerializer`中的`serialize`方法
+        ```java
+        .setRecordSerializer(
+              new KafkaRecordSerializationSchema<String>() {
+                  @Nullable
+                  @Override
+                  public ProducerRecord<byte[], byte[]> serialize(String element, KafkaSinkContext context, Long timestamp) {
+                      String[] fields = element.split(",");
+                      byte[] key = fields[0].getBytes(StandardCharsets.UTF_8);// key
+                      byte[] value = element.getBytes(StandardCharsets.UTF_8);
+                      return new ProducerRecord<>("ws", key, value);
+                  }
+              }
+        )  
+        ```
+      * 输出到mysql：只能用老的sink写法：`addsink()`
+        * 引入jdbc依赖，`mysql-connector-java`、`flink-connector-jdbc`
+        * `JdbcSink.sink()`的四个参数：
+          * 第一个参数：执行的sql，一般就是insert to等
+          * 第二个参数：预编译sql，对占位符填充值
+          * 第三个参数：执行选项---》攒批、重试等
+          * 第四个参数：连接选项---》url、用户名、密码

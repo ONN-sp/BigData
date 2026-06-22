@@ -59,7 +59,12 @@
         <artifactId>flink-connector-datagen</artifactId>
         <version>${flink.version}</version>
       </dependency>
-      
+      <dependency>
+        <groupId>org.apache.flink</groupId>
+        <artifactId>flink-connector-jdbc</artifactId>
+        <version>1.17-SNAPSHOT</version>
+      </dependency>
+
       <!-- Spark 核心依赖 -->
       <dependency>
         <groupId>org.apache.spark</groupId>
@@ -71,7 +76,14 @@
         <artifactId>spark-sql_${scala.version}</artifactId>
         <version>${spark.version}</version>
       </dependency>
-      
+
+      <!-- MySQL 依赖 -->
+      <dependency>
+        <groupId>mysql</groupId>
+        <artifactId>mysql-connector-java</artifactId>
+        <version>8.0.27</version>
+      </dependency>
+
       <!-- 测试依赖 -->
       <dependency>
         <groupId>org.junit.jupiter</groupId>
@@ -88,7 +100,7 @@
     </dependencies>
   </dependencyManagement>
 
-  <!-- 公共依赖 -->
+   <!-- 公共依赖 -->
   <dependencies>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
@@ -96,6 +108,14 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
+
+  <repositories>
+    <repository>
+      <id>apache-snapshots</id>
+      <name>apache snapshots</name>
+      <url>https://repository.apache.org/content/repositories/snapshots</url>
+    </repository>
+  </repositories>
 
   <!-- 构建插件管理 -->
   <build>
