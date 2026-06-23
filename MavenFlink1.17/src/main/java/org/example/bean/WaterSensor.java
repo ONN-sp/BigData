@@ -8,6 +8,15 @@ public class WaterSensor {
     public WaterSensor() {
     }
 
+    @Override
+    public String toString() {
+        return "WaterSensor{" +
+                "id='" + id + '\'' +
+                ", timestamp=" + timestamp +
+                ", value=" + value +
+                '}';
+    }
+
     public WaterSensor(String id, Long timestamp, Integer value) {
         this.id = id;
         this.value = value;
