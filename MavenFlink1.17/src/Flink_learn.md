@@ -672,15 +672,15 @@
       * 基于时间的：
         * `sensorKS.window(TumblingProcessingTimeWindows.of(Time.seconds(10)));`
         * `sensorKS.window(SlidingProcessingTimeWindows.of(Time.seconds(10), Time.seconds(2)));`
-        * `sensorKS.window(ProcessingTimeSessionWindows.withGap(Time.seconds(10)));`
+        * `sensorKS.window(ProcessingTimeSessionWindows.withGap(Time.seconds(10)));`/`sensorKS.window(ProcessingTimeSessionWindows.withDynamicGap(new SessionWindowTimeGapExtractor<org.example.bean.WaterSensor>()));`
       * 基于计数的：
-        * `sensorKS.countWindow(10);`
-        * `sensorKS.countWindow(10, 5);`
+        * `sensorKS.countWindow(10);`：滚动窗口，窗口长度10条数据，每个key分组到达10条数据时触发计算并关闭窗口
+        * `sensorKS.countWindow(10, 5);`：滑动窗口，窗口长度10条数据，滑动步长5条数据。每收到 slideSize 条同 key 数据，就开一次窗口、执行一次计算
         * `sensorKS.window(GlobalWindows.create());`
     * 按非键分区（Non-Keyed）窗口：如果没有进行keyBy，那么原始的DataStream就不会分成多条逻辑流。这时窗口逻辑只能在一个任务上执行，就相当于并行度变成了1。在代码中，直接调用`windowAll()`方法即可
       * `source.windowAll();`
 99. <mark>窗口函数：对窗口内数据的计算逻辑</mark>
-    * 增量聚合：数据来一条算一条，窗口只保存一条聚合中间结果，不存原始数据，窗口触发的时候（比如：窗口结束时间到达）直接输出最终聚合值（比如此时`print`才会被调用，而不是在每一条数据到来都调用）。
+    * 增量聚合：数据来一条算一条，窗口只保存一条聚合中间结果，不存原始数据，窗口触发的时候（比如：窗口结束时间到达，这就是滚动时间窗口的默认触发器策略）直接输出最终聚合值（比如此时`print`才会被调用，而不是在每一条数据到来都调用）。
       * `sensorWS.reduce();`:输入数据类型、中间临时存储数据类型、输出数据类型要一致。窗口第一条数据：不执行增量聚合方法（`reduce`方法），只会在第二条及以后同窗口数据到达时计算，增量聚合方法是来一条数据就会执行调用的（除了窗口的第一条数据）
       ![img.png](reduce增量聚合.png)
       * `sensorWS.aggregate();`可以指定输入数据类型、中间临时存储数据类型、输出数据类型。`aggregate`方法当第一条数据来的时候也会调用`add`方法，因为有初始化累加器值
@@ -689,6 +689,71 @@
         * 窗口输出时调用一次`getResult()`方法
         * 输入、中间累加器、输出类型可以不一样
       ![img.png](aggregate增量聚合.png)
-    * 全窗口函数：数据来了不做计算，全部缓存；等到窗口触发时，一次性取出窗口内所有原始数据再统一计算
-      * `sensorWS.process();`
-      * `sensorWS.apply();`
+    * 全窗口函数：数据来了不做计算，全部缓存；等到窗口触发时，一次性取出窗口内所有原始数据再统一计算。可以拿到：窗口内全部原始数据、窗口起止时间、水印、当前 key 等上下文信息。
+      适合复杂逻辑：排序、筛选异常数据、输出明细、携带窗口时间
+      * `sensorWS.process();`：`sensorWS.process(new ProcessWindowFunction<WaterSensor, String, String, TimeWindow>() {
+        @Override
+        public void process(String s, Context context, Iterable<WaterSensor> elements, Collector<String> out){}})`
+      * `sensorWS.apply();`：老版本，用的少
+    * 增量聚合和全窗口结合：比如：`aggregate(增量聚合器, 全窗口包装函数)`：先用`AggregateFunction`做增量聚合：每条数据来实时累加，窗口只存一个累加器，不缓存原始数据，内存极低；
+      窗口触发后，把聚合结果交给`ProcessWindowFunction`：可以拿到窗口时间、上下文、key 等元信息，丰富输出，窗口触发时，增量聚合的结果（只有一条）传递给全窗口函数，也就是此时的全窗口process中的迭代器只会有一条数据
+      ```java
+      // 增量聚合和全窗口函数的结合
+      SingleOutputStreamOperator<String> agg = sensorWS.aggregate(
+                new MyAgg(),
+                new MyProcess()
+        );
+        agg.print();
+        env.execute();
+      }
+      
+      public static class MyAgg implements AggregateFunction<WaterSensor, Integer, String> {
+        @Override
+        public Integer createAccumulator() {
+          System.out.println("createAccumulator");
+          return 0;
+        }
+        @Override
+        public Integer add(WaterSensor value, Integer accumulator) {
+          System.out.println("add: " + value + " " + accumulator);
+          return value.getValue() + accumulator;
+        }
+        @Override
+        public String getResult(Integer accumulator) {
+          System.out.println("getResult: " + accumulator);
+          return accumulator.toString();
+        }
+        @Override
+        public Integer merge(Integer a, Integer b) {
+          System.out.println("merge: " + a + " " + b);
+          return a + b;
+        }
+      }
+      public static class MyProcess extends ProcessWindowFunction<String, String, String, TimeWindow> {
+        @Override
+        public void process(String s, Context context, Iterable<String> elements, Collector<String> out) throws Exception {
+          Long start = context.window().getStart();
+          Long end = context.window().getEnd();
+          String startTime = DateFormatUtils.format(start, "yyyy-MM-dd HH:mm:ss");
+          String endTime = DateFormatUtils.format(end, "yyyy-MM-dd HH:mm:ss");
+          long size = elements.spliterator().estimateSize();
+          out.collect("key=" + s + "的窗口[" + startTime + " , " + endTime + "]包含" + size + "条数据" + elements.toString());
+        }
+      }
+      ```
+100. 窗口其它API：触发器和移除器，现成的几个窗口，都有默认的实现，一般不需要自定义
+     * 触发器：用来控制窗口什么时候出发计算，比如：窗口结束时间达到就触发等等
+     * 移除器：用来定义移除某些数据的逻辑
+101. <mark>窗口原理分析（以时间类型的滚动窗口为例）：</mark>
+     * 窗口什么时候触发：时间进展 >= 窗口的最大时间戳（end-1ms）
+     * 窗口是怎么划分的：窗口开始时间不是直接取当前窗口第一条数据来的时间
+       * start = 向下取整，取窗口长度的整数倍
+       * end = start + 窗口长度
+       * 窗口是左闭右开的
+     * 窗口的生命周期：
+       * 窗口创建：属于本窗口的第一条数据到达时，才创建窗口，放入一个单例的集合中（只能放一个元素的集合）
+       * 窗口触发：当时间进展 >= 窗口的最大时间戳（end-1ms）时，触发窗口
+       * 窗口关闭：时间进展 >= 窗口的最大时间戳（end-1ms）+ 允许迟到时间（默认0） 时，关闭窗口。关闭窗口和触发窗口默认是同时的
+102. flink的时间语义：到底是以哪种时间作为衡量标准，就算所谓的时间语义
+     * 事件时间：一个数据产生的时间（一般情况下，业务日志数据都携带时间戳时间，作为事件时间的判断基础）
+     * 处理时间：数据真正被处理的时间
