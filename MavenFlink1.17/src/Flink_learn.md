@@ -164,7 +164,17 @@
     env.execute();
     ```
 56. Flink中算子之间的传输关系：one to one；重分区
-57. <mark>算子链（这是一种优化措施）：将算子链接成task是非常有效的优化，可以减少线程之间的切换和基于缓存区的数据交换，在减少时延的同时提升吞吐量（在 Flink 中，Task 是一个阶段多个功能相同 subTask 的集合，Flink 会尽可能地将 operator 的 subtask 链接（chain）在一起形成 task。每个 task 在一个线程中执行。将 operators 链接成 task 是非常有效的优化：它能减少线程之间的切换，减少消息的序列化/反序列化，减少数据在缓冲区的交换，减少了延迟的同时提高整体的吞吐量。）</mark>
+57. <mark>forward（one to one）：</mark>
+    * 上下游并行度必须相等；
+    * 上游 subtask N 的数据，只会发给下游 subtask N；
+    * 不跨任务分发，无网络 IO，本地传输，性能最高
+58. <mark>对于没有使用重分区，而只是forward传递时，此时多并行度：数据从哪个 Source 出来，就进同编号下游算子的子任务，比如Source0->map0</mark>
+59. 对于flink作为kafka消费者时，多并行度：Kafka Topic 有 P 个分区；Flink Kafka Source 并行度为 S；若 S ≤ P：每个 subtask 分配若干 Kafka 分区，一个分区只会交给一个 subtask；若 S > P：多余的 subtask 空闲，不读取任何数据，比如：
+    Topic 4 分区，Source 并行度 2
+    Source subtask0：消费 partition 0、2
+    Source subtask1：消费 partition 1、3
+    同一个 kafka 分区的数据，永远固定由同一个 source 子任务读取
+60. <mark>算子链（这是一种优化措施）：将算子链接成task是非常有效的优化，可以减少线程之间的切换和基于缓存区的数据交换，在减少时延的同时提升吞吐量（在 Flink 中，Task 是一个阶段多个功能相同 subTask 的集合，Flink 会尽可能地将 operator 的 subtask 链接（chain）在一起形成 task。每个 task 在一个线程中执行。将 operators 链接成 task 是非常有效的优化：它能减少线程之间的切换，减少消息的序列化/反序列化，减少数据在缓冲区的交换，减少了延迟的同时提高整体的吞吐量。）</mark>
     * Flink中算子串子一起的条件
       * one to one
       * 并行度相同
@@ -177,47 +187,47 @@
       * 全局禁用算子链：`env.disableOperatorChaining()`
       * 某个算子不参与链化：`A.disableChaining()`；算子A不会与前面和后面的算子的串在一起
       * 从某个算子开启新链条：`A.startNewChain()`；算子A不与前面串在一起，从A开始正常链化
-58. <mark>子任务是物理执行单元，归属于算子/算子链，不是全局的概念。无重分区时，多个forward关系的算子可以合并成一条算子链，此时整条链共享一份并发实例，这一份实例就叫一个 SubTask。而一旦触发重分区（keyBy/rebalance/shuffle 等），算子链断开，上下游各自拥有独立的子任务集合</mark>
-59. WEB UI中一个框框就是一个任务，从这个框框中也可以看出分task的依据：因为HASH(对应的就是`.keyBy()`)是一个重分区操作（也就是遇到了宽依赖），那么就是一个新的task
+61. <mark>子任务是物理执行单元，归属于算子/算子链，不是全局的概念。无重分区时，多个forward关系的算子可以合并成一条算子链，此时整条链共享一份并发实例，这一份实例就叫一个 SubTask。而一旦触发重分区（keyBy/rebalance/shuffle 等），算子链断开，上下游各自拥有独立的子任务集合</mark>
+62. WEB UI中一个框框就是一个任务，从这个框框中也可以看出分task的依据：因为HASH(对应的就是`.keyBy()`)是一个重分区操作（也就是遇到了宽依赖），那么就是一个新的task
     ![img.png](WEBUItask.png)
-60. Flink中每一个TaskManager都是一个JVM进程，它可以启动多个独立的线程，来并行执行多个子任务。为了控制并发量，需要在TaskManager上对每个任务运行所占用的资源做出明确划分，这就是所谓的task slots
-61. 每个task slot表示的是TaskManager拥有计算资源的一个固定大小的子集，这些资源就是用来独立执行一个子任务的
-62. <mark>同一TaskManager 内不同 Task Slot 相互独立、并发执行</mark>
-63. <mark>Task slot和子任务的关系：</mark>
+63. Flink中每一个TaskManager都是一个JVM进程，它可以启动多个独立的线程，来并行执行多个子任务。为了控制并发量，需要在TaskManager上对每个任务运行所占用的资源做出明确划分，这就是所谓的task slots
+64. 每个task slot表示的是TaskManager拥有计算资源的一个固定大小的子集，这些资源就是用来独立执行一个子任务的
+65. <mark>同一TaskManager 内不同 Task Slot 相互独立、并发执行</mark>
+66. <mark>Task slot和子任务的关系：</mark>
     * 常规情况：一个 SubTask 占用 一个 Task Slot
     * 算子链场景：多个上下游算子被链在一起，合并成一个 Task，对应一个 SubTask，依旧只占用 一个 Slot
     * 共享 Slot 组：Flink 默认开启槽位共享：同一个作业的不同算子的子任务，可以共用同一个 Slot
-64. `flink-conf.yaml`配置文件中可以设置每个TaskManager的Slot数量：`taskmanager.numberOfTaskSlots: 10`，可以给每个TM配置不同的slot数量
-65. <mark>需要注意的是：task slot对内存是硬隔离的，而cpu不是硬隔离。slot目前仅仅用来隔离内存，不会涉及cpu的隔离，cpu还是大家共用的。在具体开发时，可以将slot数量配置为机器的cpu核心，尽量避免不同任务之间对cpu的竞争。因为：Slot 只是线程分组，不会用操作系统机制把某个 Slot 绑定到指定 CPU 核心。所有 Slot 的线程共用机器 CPU 核心，运行时会互相抢占 CPU 时间片，做不到彻底隔离</mark>
-66. <mark>不同的Task下的subtask要分发到同一个TaskSlot中，降低数据传输、提高执行效率；相同的Task下的subtask要分发到不同的TaskSlot中，以提高并行度</mark>
+67. `flink-conf.yaml`配置文件中可以设置每个TaskManager的Slot数量：`taskmanager.numberOfTaskSlots: 10`，可以给每个TM配置不同的slot数量
+68. <mark>需要注意的是：task slot对内存是硬隔离的，而cpu不是硬隔离。slot目前仅仅用来隔离内存，不会涉及cpu的隔离，cpu还是大家共用的。在具体开发时，可以将slot数量配置为机器的cpu核心，尽量避免不同任务之间对cpu的竞争。因为：Slot 只是线程分组，不会用操作系统机制把某个 Slot 绑定到指定 CPU 核心。所有 Slot 的线程共用机器 CPU 核心，运行时会互相抢占 CPU 时间片，做不到彻底隔离</mark>
+69. <mark>不同的Task下的subtask要分发到同一个TaskSlot中，降低数据传输、提高执行效率；相同的Task下的subtask要分发到不同的TaskSlot中，以提高并行度</mark>
     ![img.png](分发规则.png)
-67. 资源充足情况下：相同算子的不同子任务，分布在不同 Slot 并行运行；资源不足时：多个同算子的子任务会运行在同一个 Slot，串行执行
-68. task slot特点：
+70. 资源充足情况下：相同算子的不同子任务，分布在不同 Slot 并行运行；资源不足时：多个同算子的子任务会运行在同一个 Slot，串行执行
+71. task slot特点：
     * 均分隔离内存，不隔离cpu
     * 可以共享：同一个job中，不同算子的子任务才可以共享同一个slot，此时同时在运行的，前提是，属于同一个slot共享租，默认都是"default"
-69. <mark>flink默认是允许slot共享的，如果希望某个算子对应的任务完全独占一个 slot，或者只有某一部分算子共享 slot，在Flink中，可以通过在代码中使用`slotSharingGroup()`方法来设置slot共享组。Flink会将具有相同slot共享组的操作放入同一个slot中，同时保持不具有slot共享组的操作在其他slot中。这可以用来隔离slot：</mark>
+72. <mark>flink默认是允许slot共享的，如果希望某个算子对应的任务完全独占一个 slot，或者只有某一部分算子共享 slot，在Flink中，可以通过在代码中使用`slotSharingGroup()`方法来设置slot共享组。Flink会将具有相同slot共享组的操作放入同一个slot中，同时保持不具有slot共享组的操作在其他slot中。这可以用来隔离slot：</mark>
     `dataStream.map(...).slotSharingGroup("group1");`：这样，只有属于同一个 slot 共享组的子任务，才会开启 slot 共享，不同组之间的任务是完全隔离的，必须分配到不同的 slot 上
-70. 默认的slot共享组是"default"，如果未指定slot共享组，那么所有子任务都会被分配到"default"组中，此时所有算子操作都是一个slot共享组
-71. <mark>流程序中最大算子并行度=运行所需要的slot数量</mark>
-72. 并行度和slots数量的关系；
+73. 默认的slot共享组是"default"，如果未指定slot共享组，那么所有子任务都会被分配到"default"组中，此时所有算子操作都是一个slot共享组
+74. <mark>流程序中最大算子并行度=运行所需要的slot数量</mark>
+75. 并行度和slots数量的关系；
     * slots是一种静态的概念，表示最大的处理并发上限
     * 并行度是一种动态的概念，表示实际运行占用了几个
     * <mark>要求：slot数量>=job并行度（算子最大并行度），job才能运行，不然运行失败(这是standalone模式)。如果是YARN模式，它会自动根据提交的job的并行度，来申请taskManager的数量（申请规则：taskManager的数量=job并行度/slot数量，向上取整）</mark>
     ![img.png](并行度和slots数量.png)
-73. Standalone会话模式作业提交流程：
+76. Standalone会话模式作业提交流程：
     ![img.png](Standalone会话模式提交流程.png)（逻辑流图到作业流图最重要的就是进行算子链优化；jobmaster把作业流图转换为执行图）
-74. YARN应用模式作业提交流程：
+77. YARN应用模式作业提交流程：
     ![img.png](YARN应用模式提交作业流程.png)
-75. <mark>`DataStream` API代码由以下几部分组成：</mark> 
+78. <mark>`DataStream` API代码由以下几部分组成：</mark> 
     ![img.png](Flink代码.png)
-76. DataStream API：
+79. DataStream API：
     * 创建执行环境：`StreamExecutionEnvironment.getExecutionEnvironment()`：自动识别是远程集群还是本地IDEA环境，可以通过`new Configuration()`来指定：
       * `Configuration conf = new Configuration();     conf.set(RestOptions.BIND_PORT, "8082");      StreamExecutionEnvironment.getExecutionEnvironment(conf)`：这是设置的IDEA打开的本地Flink集群端口，与Standalone、YARN模式等无关
     * Flink流批一体，代码api是一套，默认是流处理，设置为批处理：`env.setRuntimeMode(RuntimeExecutionMode.BATCH);`；批处理设置也可以在命令行提交作业时指定：`-Dexecution.runtime-mode=BATCH`
     * 最后一定要有一个程序的触发执行，前面其实只是定义了作业的每个执行操作，然后添加到数据流图中，这时并没有真正处理数据——因为数据可能还没来，只有等到数据到来，才会从触发真正的计算，这也被称为“延迟执行”：`env.execute();`
     * 默认`env.execute`触发一个flink job，一个main方法可以调用多个execute，但是没意义，指定到第一个就会阻塞住；`env.executeAsync();`表示异步触发，不阻塞，此时一个main方法里面`env.executeAsync();`的个数=生成的flink job(一个flink job对应一个jobmaster)数
-77. <mark>注意`DataStream`内只能是相同的数据类型，可以是`自定义统一POJO、Tuple、Sting、Integer`等。而`ConnectedStreams<T1, T2>`：持有两条不同类型流，支持各自处理，不属于同一条`DataStream`</mark>
-78. <mark>源算子（Source）：Flink 中 Source 是数据流的起点，负责读取外部数据并生成 DataStream：</mark>
+80. <mark>注意`DataStream`内只能是相同的数据类型，可以是`自定义统一POJO、Tuple、Sting、Integer`等。而`ConnectedStreams<T1, T2>`：持有两条不同类型流，支持各自处理，不属于同一条`DataStream`</mark>
+81. <mark>源算子（Source）：Flink 中 Source 是数据流的起点，负责读取外部数据并生成 DataStream：</mark>
     * 从Flink1.13开始，主要使用流批统一的Source架构：`DataStreamSource<String> stream = env.fromSource(...)`，即都会注册一个Source，并返回一个`DataStreamSource`对象
       * 从集合中读取：`env.fromCollection(Arrays.asList(1, 2, 3, 4, 5));`；`env.fromElements(1, 2, 3, 4, 5);`，这也是注册Source
         * 从文件中读取：`env.readTextFile("path/to/file");`但是从Flink1.13开始就弃了，改用:`FileSource+env.fromSource()`
@@ -276,12 +286,12 @@
     datagen.print();
     ```
     ![img.png](数据生成器source.png)
-79. <mark>内存中的对象，无法直接在网络上传输，必须经历「序列化→传输→反序列化」的过程。原因：</mark>
+82. <mark>内存中的对象，无法直接在网络上传输，必须经历「序列化→传输→反序列化」的过程。原因：</mark>
       * 网络只能传输「字节流」，一连串的二进制，不能传输「对象」（代码里创建的 User、String、自定义对象，在 JVM 里是内存中的数据结构： 包含对象头、实例数据、引用指针，这些结构是 JVM 私有的，其他进程 / 机器完全无法识别）
       * 跨平台 / 跨语言通信需要统一格式
       * 持久化存储也需要序列化：不仅是网络传输，把对象写入文件、数据库，同样需要序列
-80. Flink支持的数据类型是`TypeInformation`类型，其中包含了常见使用的类型，比如`Types.STRING`、`Types.INT`、`Types.LONG`等
-81. <mark>Flink中自定义实体类作为数据流传输对象，满足一套规定规则的普通java bean，称作`POJO`。Flink会为`POJO`生成专用序列化器，性能远高于`GenericTypeInformation（ Kryo 序列化）`，推荐业务实体全部使用`POJO`。`POJO`必须同时满足：</mark>
+83. Flink支持的数据类型是`TypeInformation`类型，其中包含了常见使用的类型，比如`Types.STRING`、`Types.INT`、`Types.LONG`等
+84. <mark>Flink中自定义实体类作为数据流传输对象，满足一套规定规则的普通java bean，称作`POJO`。Flink会为`POJO`生成专用序列化器，性能远高于`GenericTypeInformation（ Kryo 序列化）`，推荐业务实体全部使用`POJO`。`POJO`必须同时满足：</mark>
     * 类是public
     * 有无参公共构造函数
     * 所有字段属性必须是public，或提供public getter/setter
@@ -313,15 +323,15 @@
     public void setAge(Integer age) { this.age = age; }
     }
     ```
-82. <mark>Flink的基本转换算子：</mark>
+85. <mark>Flink的基本转换算子：</mark>
     * `map`：就是一个一一映射，消费一个元素就产出一个元素
     * `filter`：转换操作，对数据流执行一个过滤，通过一个布尔条件表达式设置过滤条件，对于每一个流内元素进行判断，若为true则元素正常输出，若为false则元素被过滤掉
     * `flatMap`：压平操作，主要是将数据流中的整体(一般是集合类型)拆分成一个一个的个体使用。消费一个元素，可以产生0到多个元素，使用`out.collect`采集器传到下游，flatmap就是通过采集器来控制一进多出的。它是flatten和map的结合
-83. <mark>Flink中流的转换关系：</mark>
+86. <mark>Flink中流的转换关系：</mark>
     *  Source 生成的初始流都是`DataStream`，`DataStreamSource`继承于`SingleOutputStreamOperator`，而后者继承于`DataStream`；经过转换算子（`map`、`filter`、`flatMap`等）得到的仍然是`DataStream`
     * `DataStream`在`keyBy()`后得到`KeyedStream`键控流（`ConnectedStream`在`keyBy()`后得到的是`ConnectedStream`），分组后做`reduce、window、sum`等操作得到的还是`DataStream`
     * `DataStream`在`connect()`后得到`ConnectedStream`后，此时对`ConnectedStream`进行转换算子（`map`、`filter`、`flatMap`等），得到的还是`DataStream`
-84. <mark>Flink的聚合算子：对于Flink而言，DataStream是没有直接进行聚合的API的。因为我们对海量数据做聚合肯定要进行分区并行处理，这样才能提高效率。所以在Flink中，要做聚合，需要先进行分区，即keyBy：</mark>
+87. <mark>Flink的聚合算子：对于Flink而言，DataStream是没有直接进行聚合的API的。因为我们对海量数据做聚合肯定要进行分区并行处理，这样才能提高效率。所以在Flink中，要做聚合，需要先进行分区，即keyBy：</mark>
     * `keyBy`：聚合前必须要用的一个算子，通过指定key可以将一条流从逻辑上划分成不同的组。然后相同组在一个分区，这里的分区，其实就是并行处理的子任务。基于不同的key，流中的数据将被分配到不同的分组中，相同的key在同一个分区。keyBy返回的是一个KeyedStream，键控流；keyBy不是转换算子，只是对数据进行重分区，不能设置并行度
     ```txt
     keyBy分组与分区的区别：
@@ -340,8 +350,8 @@
     ```
     * 简单聚合(分组内聚合)：基于`KeyedStream`的`sum`、`max`、`min`、`avg`、`count`等，也就是对`keyBy()`得到的分组进行简单聚合操作。在Flink中简单聚合算子需要和`keyBy()`成对出现
     * `reduce`：还是要跟在`keyBy()`之后。它是两两聚合，并且对输入类型=输出类型。对于`keyBy()`得到的每组数据的第一条不会进入`reduce`方法，会存起来，等下一条数据来时，再进行聚合操作；再有下一条同组数据来时，就是对上一条聚合结果（体现了flink的有状态计算）和下一条数据进行聚合操作
-85. <mark>需要注意：算子物理分区数（数据传输通道对应的分区） = 该算子子任务数 = 算子并行度：对于一条算子链上的算子来说：算子并行度=该算子的子任务总数量，上下游之间传输数据的物理分区通道数量=下游算子并行度（子任务数）；而对于`keyBy()`它有一个逻辑分区的概念，由于`keyBy()`后的分组数可以大于下游分区数（下游算子并行度/子任务数），因此可以多个逻辑分组在一个物理分区（多个逻辑分组在一个子任务中执行）</mark>
-86. 富函数：RichXXXFunction。普通函数（MapFunction、FilterFunction、SinkFunction 等）只提供处理数据的方法，而富函数（Rich 开头） 是普通接口(MapFunction、FilterFunction、SinkFunction 等)的增强实现类：`RichMapFunction / RichFilterFunction / RichFlatMapFunction / RichSourceFunction / RichSinkFunction`等，它是每一个算子都提供了的。富函数多了生命周期管理方法和运行时上下文：
+88. <mark>需要注意：算子物理分区数（数据传输通道对应的分区） = 该算子子任务数 = 算子并行度：对于一条算子链上的算子来说：算子并行度=该算子的子任务总数量，上下游之间传输数据的物理分区通道数量=下游算子并行度（子任务数）；而对于`keyBy()`它有一个逻辑分区的概念，由于`keyBy()`后的分组数可以大于下游分区数（下游算子并行度/子任务数），因此可以多个逻辑分组在一个物理分区（多个逻辑分组在一个子任务中执行）</mark>
+89. 富函数：RichXXXFunction。普通函数（MapFunction、FilterFunction、SinkFunction 等）只提供处理数据的方法，而富函数（Rich 开头） 是普通接口(MapFunction、FilterFunction、SinkFunction 等)的增强实现类：`RichMapFunction / RichFilterFunction / RichFlatMapFunction / RichSourceFunction / RichSinkFunction`等，它是每一个算子都提供了的。富函数多了生命周期管理方法和运行时上下文：
     * `open()`：每个子任务，在启动时，调用一次，且只调用一次
     * `close()`：每个子任务，在结束时，调用一次，且只调用一次。如果是flink程序异常退出，不会调用close；如果是正常调用cancel命令，会调用close
     * 多了运行时上下文 RuntimeContext获取：通过 `getRuntimeContext()` 获取，普通函数拿不到。可以获取当前子任务编号、并行度、任务名称，算子状态 / KeyedState 操作
@@ -353,7 +363,7 @@
     ValueState<Long> countState = ctx.getState(new ValueStateDescriptor<>("cnt", Long.class));
     ```
     ![img.png](富函数.png)
-87. <mark>分区(一个子任务，可以理解为一个分区，这和kafka的分区不是一个概念哈)算子：所有算子都是重分区算子，会划分出新的task。在flink中，如果下游算子并行度为n，那么当前算子的每一条输出数据只会路由到下游其中一个子任务，路由规则由当前算子的数据分发策略决定，分发策略如下：</mark>
+90. <mark>分区(一个子任务，可以理解为一个分区，这和kafka的分区不是一个概念哈)算子：所有算子都是重分区算子，会划分出新的task。在flink中，如果下游算子并行度为n，那么当前算子的每一条输出数据只会路由到下游其中一个子任务，路由规则由当前算子的数据分发策略决定，分发策略如下：</mark>
     * `shuffle()`：随机分区，每一条数据都有机会被分配到任意一个分区中，然后每个子任务执行自己的数据
     * `rebalance()`：轮询分区，将数据挨个分配到分区中，然后每个子任务执行自己的数据（这是默认方式，无 keyBy 的算子默认策略）
     * `rescale()`：缩放轮询分区，将数据根据分区数进行缩放，然后每个子任务执行自己的数据，如：
@@ -397,7 +407,7 @@
     }
     ```
     ![img.png](自定义分区器.png)(奇偶数据的分区不同，即在不同的下游子任务中运行)
-88. <mark>`process()`算子不是单一方法，是底层通用处理API(process() 是 Flink 底层万能处理入口，普通流用 ProcessFunction，分组流用 KeyedProcessFunction)，所有转换算子底层最终都基于Process系列函数实现（map/filter/flatMap/window/keyBy 底层封装的都是 Process），其优势：</mark>
+91. <mark>`process()`算子不是单一方法，是底层通用处理API(process() 是 Flink 底层万能处理入口，普通流用 ProcessFunction，分组流用 KeyedProcessFunction)，所有转换算子底层最终都基于Process系列函数实现（map/filter/flatMap/window/keyBy 底层封装的都是 Process），其优势：</mark>
     * 相比 map/filter 只能处理单条数据，Process 函数可以拿到 上下文 Context，具备四大独有能力：
       * 获取当前数据时间（处理时间 / 事件时间）
       * 注册定时器（Timer，延迟触发逻辑）
@@ -466,10 +476,10 @@
       ```
     * 对于`processElement`直接输出的是主流，如果要获取测流需要使用`process.getSideOutput(...)`，前提是在`processElement()`中把数据分流到了独立的测输出流`ctx.output(标签, 数据)`
     * `process()`算子是最灵活的，逻辑都是自己写的
-89. 分流：将一条数据流拆分成完全独立的两条、甚至多条流。也即是基于一个DataStream，定义一些筛选条件，将符合条件的数据筛选出来放到对应的流里
+92. 分流：将一条数据流拆分成完全独立的两条、甚至多条流。也即是基于一个DataStream，定义一些筛选条件，将符合条件的数据筛选出来放到对应的流里
     * `filter`可以实现，缺点：同一个数据要被处理两遍，也就是同一个数据要在不同流中都要判断，效率低
     * 测输出流：需要调用上下文ctx的`.output()`方法，就可以输出任意类型的数据了。而测输出流的标记和提取，都离不开一个“输出标签”，指定了测输出流的id和类型
-90. 合流：
+93. 合流：
     * 联合`.union()`算子：最简单的合理操作就是直接将多条流合在一起，叫做流的“联合”。联合操作要求必须流中的数据类型必须相同，合并之后的新流会包括所有流中的元素，数据类型不变。`union`算子一次可以合并多条流：链式或者逗号分隔都可以
     * `connect()`算子：允许流的数据类型不同。`connect`不能一次合并多条流。此时得到的是一个`ConnectedStreams`对象，连接流对象可以看成是两条流形式上的“统一”，被放在了一个同一个流中；事实上内部仍保持各自的数据形式不变，彼此之间是相互独立的。
       要想得到新的`DataStream`，可以进一步定义一个“同处理”转换操作（如`CoMapFunction`），用于说明对于不同source、不同类型的数据，怎样分别进行处理转换，得到统一的输出类型。整体来看，`ConnectedStream`中的两条流可以保持各自的数据类型、处理方式也可以不同，最终
@@ -584,8 +594,8 @@
             }
         });
     ```
-91. `DataStream`：数据流；`KeyedStream`：键控流；`ConnectedStream`：连接流
-92. 输出算子(`sink`)：
+94. `DataStream`：数据流；`KeyedStream`：键控流；`ConnectedStream`：连接流
+95. 输出算子(`sink`)：
     * 内置`Sink`：`print`：打印输出
     * 通用`Sink`：`sinkTo()`：
       * 输出到文件：`FileSink`：
@@ -651,130 +661,183 @@
       * 自定义sink(一般很少用)：`addSink()`，此时要实现一个`sinkFunction`
         * 实现`invoke`方法，写自定义的逻辑，来一条数据调用一次
         * 如果要创建连接对象，那么一般是实现的`RichSinkFunction`，把创建连接放到`open`中
-93. <mark>flink的窗口：一般就是划定的一段时间范围，也就是“时间窗”；对在这范围内的数据进行处理，就是所谓的窗口计算</mark>
-94. flink是一种流式计算引擎，主要是来处理无界数据流的，数据源源不断、无穷无尽。想要更加方便高效地处理无界流，一种方式就是将无限数据切割成有限的“数据块”进行处理，这就是所谓的“窗口”
-95. <mark>flink中窗口其实并不是一个“框”，应该把窗口理解成一个“桶”。窗口可以把流切割成有限大小的多个“存储桶”；每个数据都会分发到对应的桶中，当到达窗口结束时间时，就对每个桶中收集的数据进行计算处理</mark>
-96. <mark>flink中窗口并不是静态准备好的，而是动态创建的——当有落在这个窗口区间范围的数据达到时，才创建对应的窗口，也就是说flink的窗口是基于事件驱动的</mark>
-97. <mark>flink窗口类型：</mark>
-    * 按驱动类型分：
-      * 时间窗口：以时间点来定义窗口的开始和结束
-      * 计数窗口：基于元素的个数来截取数据，到达固定的个数时就触发计算并关闭窗口，底层是基于全局窗口实现的
-    * 按窗口分配数据的规则分：滑动窗口和滚动窗口可以基于时间和基于计数来分配数据
-      * 滚动窗口：固定的大小，是一种对数据进行“均匀分片”的划分方式。窗口之间没有重叠，也不会有间隔，是“首尾相接”的状态，每个数据都会被分配到一个窗口，而且只会属于一个窗口
-      * 滑动窗口：固定的大小，但是窗口之间不是首尾相接的，而是可以“错开”一定的位置。滑动窗口参数有两个：窗口大小和滑动步长。滑动步长表示的是窗口计算的频率。当窗口在结束时间触发计算输出结果，那么滑动步长就代表了计算频率。
-                当滑动步长小于窗口大小时，滑动窗口就会出现重叠，这些数据也可能会被同时分配到多个窗口中。而具体的个数，就由窗口大小和滑动步长的壁纸来决定。滑动窗口适合计算结果更新频率非常高的场景
-      ![img.png](滑动窗口.png)
-      * 会话窗口：基于“会话”来对数据进行分组。会话窗口中，最重要的参数是会话的超时时间，也就是两个会话窗口之间的最小距离。如果相邻两个数据到来的时间间隔小于指定的超时时间，那么说明还在保持会话，它们就属于同一个窗口；否则就是新的会话窗口。
-                会话窗口之间一定是不会重叠的，而且会留有至少为size的间隔
-      * 全局窗口：全局窗口是一种特殊的窗口，对全局有效，会把相同key的所有数据都分配到同一个窗口中。这种窗口没有结束的时候，默认是不会做触发计算的。如果希望它能对数据进行计算处理，需要自定义触发器。全局窗口没有结束的时间点，所以一般在希望做更加灵活的窗口处理时自定义使用
-98. <mark>窗口API：会返回一个`WindowedStream`对象</mark>
-    * 按键分区（Keyed）窗口：经过keyBy后，数据流会按照key被分为多条逻辑流，这就是KeyedStream。基于KeyedStream进行窗口操作时，窗口计算会在多个并行子任务上同时执行。相同key的数据会被发送到同一个并行子任务，而窗口操作会基于每个key进行单独的处理。所以可认为，每个key上都定义了一组窗口，各自独立地进行统计计算。代码上`.keyBy().window()`即可
-      * 基于时间的：
-        * `sensorKS.window(TumblingProcessingTimeWindows.of(Time.seconds(10)));`
-        * `sensorKS.window(SlidingProcessingTimeWindows.of(Time.seconds(10), Time.seconds(2)));`
-        * `sensorKS.window(ProcessingTimeSessionWindows.withGap(Time.seconds(10)));`/`sensorKS.window(ProcessingTimeSessionWindows.withDynamicGap(new SessionWindowTimeGapExtractor<org.example.bean.WaterSensor>()));`
-      * 基于计数的：
-        * `sensorKS.countWindow(10);`：滚动窗口，窗口长度10条数据，每个key分组到达10条数据时触发计算并关闭窗口
-        * `sensorKS.countWindow(10, 5);`：滑动窗口，窗口长度10条数据，滑动步长5条数据。每收到 slideSize 条同 key 数据，就开一次窗口、执行一次计算
-        * `sensorKS.window(GlobalWindows.create());`
-    * 按非键分区（Non-Keyed）窗口：如果没有进行keyBy，那么原始的DataStream就不会分成多条逻辑流。这时窗口逻辑只能在一个任务上执行，就相当于并行度变成了1。在代码中，直接调用`windowAll()`方法即可
-      * `source.windowAll();`
-99. <mark>窗口函数：对窗口内数据的计算逻辑</mark>
-    * 增量聚合：数据来一条算一条，窗口只保存一条聚合中间结果，不存原始数据，窗口触发的时候（比如：窗口结束时间到达，这就是滚动时间窗口的默认触发器策略）直接输出最终聚合值（比如此时`print`才会被调用，而不是在每一条数据到来都调用）。
-      * `sensorWS.reduce();`:输入数据类型、中间临时存储数据类型、输出数据类型要一致。窗口第一条数据：不执行增量聚合方法（`reduce`方法），只会在第二条及以后同窗口数据到达时计算，增量聚合方法是来一条数据就会执行调用的（除了窗口的第一条数据）
-      ![img.png](reduce增量聚合.png)
-      * `sensorWS.aggregate();`可以指定输入数据类型、中间临时存储数据类型、输出数据类型。`aggregate`方法当第一条数据来的时候也会调用`add`方法，因为有初始化累加器值
-        * 属于本窗口的第一条数据来，创建窗口，创建累加器
-        * 来一条计算一条，调用一次`add()`方法
-        * 窗口输出时调用一次`getResult()`方法
-        * 输入、中间累加器、输出类型可以不一样
-      ![img.png](aggregate增量聚合.png)
-    * 全窗口函数：数据来了不做计算，全部缓存；等到窗口触发时，一次性取出窗口内所有原始数据再统一计算。可以拿到：窗口内全部原始数据、窗口起止时间、水印、当前 key 等上下文信息。
-      适合复杂逻辑：排序、筛选异常数据、输出明细、携带窗口时间
-      * `sensorWS.process();`：`sensorWS.process(new ProcessWindowFunction<WaterSensor, String, String, TimeWindow>() {
-        @Override
-        public void process(String s, Context context, Iterable<WaterSensor> elements, Collector<String> out){}})`
-      * `sensorWS.apply();`：老版本，用的少
-    * 增量聚合和全窗口结合：比如：`aggregate(增量聚合器, 全窗口包装函数)`：先用`AggregateFunction`做增量聚合：每条数据来实时累加，窗口只存一个累加器，不缓存原始数据，内存极低；
-      窗口触发后，把聚合结果交给`ProcessWindowFunction`：可以拿到窗口时间、上下文、key 等元信息，丰富输出，窗口触发时，增量聚合的结果（只有一条）传递给全窗口函数，也就是此时的全窗口process中的迭代器只会有一条数据
-      ```java
-      // 增量聚合和全窗口函数的结合
-      SingleOutputStreamOperator<String> agg = sensorWS.aggregate(
-                new MyAgg(),
-                new MyProcess()
-        );
-        agg.print();
-        env.execute();
-      }
+96. <mark>flink的窗口：一般就是划定的一段时间范围，也就是“时间窗”；对在这范围内的数据进行处理，就是所谓的窗口计算</mark>
+97. flink是一种流式计算引擎，主要是来处理无界数据流的，数据源源不断、无穷无尽。想要更加方便高效地处理无界流，一种方式就是将无限数据切割成有限的“数据块”进行处理，这就是所谓的“窗口”
+98. <mark>flink中窗口其实并不是一个“框”，应该把窗口理解成一个“桶”。窗口可以把流切割成有限大小的多个“存储桶”；每个数据都会分发到对应的桶中，当到达窗口结束时间时，就对每个桶中收集的数据进行计算处理</mark>
+99. <mark>flink中窗口并不是静态准备好的，而是动态创建的——当有落在这个窗口区间范围的数据达到时，才创建对应的窗口，也就是说flink的窗口是基于事件驱动的</mark>
+100. 在flink中，窗口其实并不是一个“框”，应该把窗口理解成一个“桶”。在flinl中，窗口可以把流切割成有限大小的多个“存储桶”；每隔数据都会分发到对应的桶中，当到达窗口结束时间时，就对每隔桶中收集的数据进行计算处理
+101. <mark>flink窗口类型：</mark>
+     * 按驱动类型分：
+       * 时间窗口：以时间点来定义窗口的开始和结束
+       * 计数窗口：基于元素的个数来截取数据，到达固定的个数时就触发计算并关闭窗口，底层是基于全局窗口实现的
+     * 按窗口分配数据的规则分：滑动窗口和滚动窗口可以基于时间和基于计数来分配数据
+       * 滚动窗口：固定的大小，是一种对数据进行“均匀分片”的划分方式。窗口之间没有重叠，也不会有间隔，是“首尾相接”的状态，每个数据都会被分配到一个窗口，而且只会属于一个窗口
+       * 滑动窗口：固定的大小，但是窗口之间不是首尾相接的，而是可以“错开”一定的位置。滑动窗口参数有两个：窗口大小和滑动步长。滑动步长表示的是窗口计算的频率。当窗口在结束时间触发计算输出结果，那么滑动步长就代表了计算频率。
+                 当滑动步长小于窗口大小时，滑动窗口就会出现重叠，这些数据也可能会被同时分配到多个窗口中。而具体的个数，就由窗口大小和滑动步长的壁纸来决定。滑动窗口适合计算结果更新频率非常高的场景
+       ![img.png](滑动窗口.png)
+       * 会话窗口：基于“会话”来对数据进行分组。会话窗口中，最重要的参数是会话的超时时间，也就是两个会话窗口之间的最小距离。如果相邻两个数据到来的时间间隔小于指定的超时时间，那么说明还在保持会话，它们就属于同一个窗口；否则就是新的会话窗口。
+                 会话窗口之间一定是不会重叠的，而且会留有至少为size的间隔
+       * 全局窗口：全局窗口是一种特殊的窗口，对全局有效，会把相同key的所有数据都分配到同一个窗口中。这种窗口没有结束的时候，默认是不会做触发计算的。如果希望它能对数据进行计算处理，需要自定义触发器。全局窗口没有结束的时间点，所以一般在希望做更加灵活的窗口处理时自定义使用
+102. <mark>窗口API：会返回一个`WindowedStream`对象</mark>
+     * 按键分区（Keyed）窗口：经过keyBy后，数据流会按照key被分为多条逻辑流，这就是KeyedStream。基于KeyedStream进行窗口操作时，窗口计算会在多个并行子任务上同时执行。相同key的数据会被发送到同一个并行子任务，而窗口操作会基于每个key进行单独的处理。所以可认为，每个key上都定义了一组窗口，各自独立地进行统计计算。代码上`.keyBy().window()`即可
+       * 基于时间的：
+         * `sensorKS.window(TumblingProcessingTimeWindows.of(Time.seconds(10)));`
+         * `sensorKS.window(SlidingProcessingTimeWindows.of(Time.seconds(10), Time.seconds(2)));`
+         * `sensorKS.window(ProcessingTimeSessionWindows.withGap(Time.seconds(10)));`/`sensorKS.window(ProcessingTimeSessionWindows.withDynamicGap(new SessionWindowTimeGapExtractor<org.example.bean.WaterSensor>()));`
+       * 基于计数的：
+         * `sensorKS.countWindow(10);`：滚动窗口，窗口长度10条数据，每个key分组到达10条数据时触发计算并关闭窗口
+         * `sensorKS.countWindow(10, 5);`：滑动窗口，窗口长度10条数据，滑动步长5条数据。每收到 slideSize 条同 key 数据，就开一次窗口、执行一次计算
+         * `sensorKS.window(GlobalWindows.create());`
+     * 按非键分区（Non-Keyed）窗口：如果没有进行keyBy，那么原始的DataStream就不会分成多条逻辑流。这时窗口逻辑只能在一个任务上执行，就相当于并行度变成了1。在代码中，直接调用`windowAll()`方法即可
+       * `source.windowAll();`
+103. <mark>窗口函数：对窗口内数据的计算逻辑</mark>
+     * 增量聚合：数据来一条算一条，窗口只保存一条聚合中间结果，不存原始数据，窗口触发的时候（比如：窗口结束时间到达，这就是滚动时间窗口的默认触发器策略）直接输出最终聚合值（比如此时`print`才会被调用，而不是在每一条数据到来都调用）。
+       * `sensorWS.reduce();`:输入数据类型、中间临时存储数据类型、输出数据类型要一致。窗口第一条数据：不执行增量聚合方法（`reduce`方法），只会在第二条及以后同窗口数据到达时计算，增量聚合方法是来一条数据就会执行调用的（除了窗口的第一条数据）
+       ![img.png](reduce增量聚合.png)
+       * `sensorWS.aggregate();`可以指定输入数据类型、中间临时存储数据类型、输出数据类型。`aggregate`方法当第一条数据来的时候也会调用`add`方法，因为有初始化累加器值
+         * 属于本窗口的第一条数据来，创建窗口，创建累加器
+         * 来一条计算一条，调用一次`add()`方法
+         * 窗口输出时调用一次`getResult()`方法
+         * 输入、中间累加器、输出类型可以不一样
+       ![img.png](aggregate增量聚合.png)
+     * 全窗口函数：数据来了不做计算，全部缓存；等到窗口触发时，一次性取出窗口内所有原始数据再统一计算。可以拿到：窗口内全部原始数据、窗口起止时间、水印、当前 key 等上下文信息。
+       适合复杂逻辑：排序、筛选异常数据、输出明细、携带窗口时间
+       * `sensorWS.process();`：`sensorWS.process(new ProcessWindowFunction<WaterSensor, String, String, TimeWindow>() {
+         @Override
+         public void process(String s, Context context, Iterable<WaterSensor> elements, Collector<String> out){}})`
+       * `sensorWS.apply();`：老版本，用的少
+     * 增量聚合和全窗口结合：比如：`aggregate(增量聚合器, 全窗口包装函数)`：先用`AggregateFunction`做增量聚合：每条数据来实时累加，窗口只存一个累加器，不缓存原始数据，内存极低；
+       窗口触发后，把聚合结果交给`ProcessWindowFunction`：可以拿到窗口时间、上下文、key 等元信息，丰富输出，窗口触发时，增量聚合的结果（只有一条）传递给全窗口函数，也就是此时的全窗口process中的迭代器只会有一条数据
+       ```java
+       // 增量聚合和全窗口函数的结合
+       SingleOutputStreamOperator<String> agg = sensorWS.aggregate(
+                 new MyAgg(),
+                 new MyProcess()
+         );
+         agg.print();
+         env.execute();
+       }
       
-      public static class MyAgg implements AggregateFunction<WaterSensor, Integer, String> {
-        @Override
-        public Integer createAccumulator() {
-          System.out.println("createAccumulator");
-          return 0;
-        }
-        @Override
-        public Integer add(WaterSensor value, Integer accumulator) {
-          System.out.println("add: " + value + " " + accumulator);
-          return value.getValue() + accumulator;
-        }
-        @Override
-        public String getResult(Integer accumulator) {
-          System.out.println("getResult: " + accumulator);
-          return accumulator.toString();
-        }
-        @Override
-        public Integer merge(Integer a, Integer b) {
-          System.out.println("merge: " + a + " " + b);
-          return a + b;
-        }
-      }
-      public static class MyProcess extends ProcessWindowFunction<String, String, String, TimeWindow> {
-        @Override
-        public void process(String s, Context context, Iterable<String> elements, Collector<String> out) throws Exception {
-          Long start = context.window().getStart();
-          Long end = context.window().getEnd();
-          String startTime = DateFormatUtils.format(start, "yyyy-MM-dd HH:mm:ss");
-          String endTime = DateFormatUtils.format(end, "yyyy-MM-dd HH:mm:ss");
-          long size = elements.spliterator().estimateSize();
-          out.collect("key=" + s + "的窗口[" + startTime + " , " + endTime + "]包含" + size + "条数据" + elements.toString());
-        }
-      }
-      ```
-100. 窗口其它API：触发器和移除器，现成的几个窗口，都有默认的实现，一般不需要自定义
+       public static class MyAgg implements AggregateFunction<WaterSensor, Integer, String> {
+         @Override
+         public Integer createAccumulator() {
+           System.out.println("createAccumulator");
+           return 0;
+         }
+         @Override
+         public Integer add(WaterSensor value, Integer accumulator) {
+           System.out.println("add: " + value + " " + accumulator);
+           return value.getValue() + accumulator;
+         }
+         @Override
+         public String getResult(Integer accumulator) {
+           System.out.println("getResult: " + accumulator);
+           return accumulator.toString();
+         }
+         @Override
+         public Integer merge(Integer a, Integer b) {
+           System.out.println("merge: " + a + " " + b);
+           return a + b;
+         }
+       }
+       public static class MyProcess extends ProcessWindowFunction<String, String, String, TimeWindow> {
+         @Override
+         public void process(String s, Context context, Iterable<String> elements, Collector<String> out) throws Exception {
+           Long start = context.window().getStart();
+           Long end = context.window().getEnd();
+           String startTime = DateFormatUtils.format(start, "yyyy-MM-dd HH:mm:ss");
+           String endTime = DateFormatUtils.format(end, "yyyy-MM-dd HH:mm:ss");
+           long size = elements.spliterator().estimateSize();
+           out.collect("key=" + s + "的窗口[" + startTime + " , " + endTime + "]包含" + size + "条数据" + elements.toString());
+         }
+       }
+       ```
+104. 窗口其它API：触发器和移除器，现成的几个窗口，都有默认的实现，一般不需要自定义
      * 触发器：用来控制窗口什么时候出发计算，比如：窗口结束时间达到就触发等等
      * 移除器：用来定义移除某些数据的逻辑
-101. <mark>窗口原理分析（以时间类型的滚动窗口为例）：</mark>
-     * 窗口什么时候触发：时间进展 >= 窗口的最大时间戳（end-1ms）
+105. <mark>窗口原理分析（以时间类型的滚动窗口为例）：</mark>
+     * <mark>窗口什么时候触发：时间进展（水位线就是用来衡量事件时间的时间进展） >= 窗口的最大时间戳（end-1ms）</mark>
      * 窗口是怎么划分的：窗口开始时间不是直接取当前窗口第一条数据来的时间
        * start = 向下取整，取窗口长度的整数倍
        * end = start + 窗口长度
        * 窗口是左闭右开的
-     * 窗口的生命周期：
+     * <mark>窗口的生命周期：</mark>
        * 窗口创建：属于本窗口的第一条数据到达时，才创建窗口，放入一个单例的集合中（只能放一个元素的集合）
-       * 窗口触发：当时间进展 >= 窗口的最大时间戳（end-1ms）时，触发窗口
-       * 窗口关闭：时间进展 >= 窗口的最大时间戳（end-1ms）+ 允许迟到时间（默认0） 时，关闭窗口。关闭窗口和触发窗口默认是同时的
-102. flink的时间语义：到底是以哪种时间作为衡量标准，就算所谓的时间语义
+       * 窗口触发：当时间进展 >= 窗口的最大时间戳（end-1ms）时，触发窗口。也可以说成是当前水位线 >= 窗口的最大时间戳（end-1ms）
+       * 窗口关闭：时间进展 >= 窗口的最大时间戳（end-1ms）+ 允许迟到时间（默认0，这里的允许迟到时间和处理乱序数据的延迟时间是不一样的） 时，关闭窗口，关闭窗口就会销毁窗口了。关闭窗口和触发窗口默认是同时的
+106. flink的时间语义：到底是以哪种时间作为衡量标准，就算所谓的时间语义
      * 事件时间：一个数据产生的时间（一般情况下，业务日志数据都携带时间戳时间，作为事件时间的判断基础）
      * 处理时间：数据真正被处理的时间
-103. 在窗口的处理过程中，我们可以基于数据的时间戳，自定义一个“逻辑时钟”。这个时钟的时间不会自动流逝；它的时间进展，就是靠着新到数据的时间戳来推动的。这样的好处在于，计算的过程可以完全不依赖处理时间
-104. <mark>在flink中，用来衡量事件时间进展的标记，就被称作“水位线”。具体实现上，水位线可以看作一条特殊的数据记录，它是插入到数据流中的一个标记点，主要内容就是一个时间戳，用来指示当前的事件事件。
+107. <mark>当前时间进展<=>当前水位线</mark>
+108. 在窗口的处理过程中，我们可以基于数据的时间戳，自定义一个“逻辑时钟”。这个时钟的时间不会自动流逝；它的时间进展，就是靠着新到数据的时间戳来推动的。这样的好处在于，计算的过程可以完全不依赖处理时间
+109. <mark>在flink中，用来衡量事件时间进展的标记，就被称作“水位线”。具体实现上，水位线可以看作一条特殊的数据记录，它是插入到数据流中的一个标记点，主要内容就是一个时间戳，用来指示当前的事件事件。
      而它插入流中的位置，就应该是在某个数据到来之后，这样就可以从这个数据中提取时间戳，作为当前水位线的时间戳了</mark>
-105. <mark>有序流中的水位线：</mark>
-     * 理想状态（数据量小），数据应该按照生成的先后顺序进入流中，每条数据产生一个水位线数据
+110. <mark>有序流中的水位线：</mark>
+     * 理想状态（数据量小），数据应该按照生成的先后顺序进入流中，每条数据产生一个水位线数据。基本不用这种方式
      * 实际状态（数据量大且同时涌来的数据时间差会非常小，此时如果每条数据都抽取一条水位线数据，性能很差），所以为了提高效率，一般会每隔一段时间生成一个水位线
-106. <mark>乱序流中的水位线：在分布式系统中，数据在节点间传输，会因为网络传输延迟的不确定性，导致顺序发生改变，这就是所谓的“乱序数据”</mark>
-     * 乱序+数据量小：每来一个数据就提取它的时间戳、插入一个水位线。不过现在的情况是数据乱序，所以插入新的水位线时，要先判断一下时间戳是否比之前的大，否则就不再生成新的水位线。也就是说，只有数据的时间戳比当前时钟大，才能推动时钟前进，这时才插入水位线（类似单调栈）
+111. <mark>乱序流中的水位线：在分布式系统中，数据在节点间传输，会因为网络传输延迟的不确定性，导致顺序发生改变，这就是所谓的“乱序数据”</mark>
+     * 乱序+数据量小：每来一个数据就提取它的时间戳、插入一个水位线。不过现在的情况是数据乱序，所以插入新的水位线时，要先判断一下时间戳是否比之前的大，否则就不再生成新的水位线。也就是说，只有数据的时间戳比当前时钟大，才能推动时钟前进`maxTimestamp = Math.max(maxTimestamp, eventTimestamp);`，这时才插入水位线（类似单调栈）。基本不用这种方式
      * 乱序+数据量大：考虑到大量数据同时到来的处理效率，同样可以周期性地生成水位线。这时只需要保存一下之前所有数据中的最大时间戳，需要插入水位线时，就直接以它作为时间戳生成新的水位线（生成水位线数据时也需要和前一段数据的水位线进行判断，看看是否会推进）
      * 乱序+迟到数据：为了让窗口能够正确收集到迟到的数据，我们也可以等上一段时间，比如2秒；也就是用当前已有数据的最大时间戳减去2秒，就是要插入的水位线的时间戳。这样的话，9秒数据到来之后，事件时钟不会直接推进到9秒，而是进展到了7秒；必须等到
-       11秒的数据到来之后，事件时钟才会进展到9秒，这样迟到的数据也都已收集完，0~9秒的窗口就可以正确计算结果了
-       ![img.png](水位线_迟到数据.png)
-107. <mark>水位线代表了当前的事件时间时钟，而且可以在数据的时间戳基础上加一些延迟来保证窗口不丢数据</mark>
-108. <mark>水位线的特性：</mark>
+       11秒的数据到来之后，事件时钟才会进展到9秒，这样迟到的数据也都已收集完，0~9秒的窗口就可以正确计算结果了。此时抽取水位线数据时不用额外叠加延迟时间，即此时的水位线数据还是9秒而不是11秒（可以理解为：currentWatermark = 当前观测到最大事件时间 - 延迟时间）
+       ![img.png](水位线_延迟数据.png)
+112. <mark>内置watermark的生成原理：</mark>
+     * `forBoundedOutOfOrderness`、`forMonotonousTimestamps`等内置的水位线生成器都是周期性的。可以通过`env.getConfig().setAutoWatermarkInterval()`来设置水位线的周期性，默认是200ms，一般不用改
+     * 有序流：watermark = 当前最大的事件时间 - 1ms
+     * 乱序流：watermark = 当前最大的事件时间 - 延迟时间 - 1ms
+113. 当前水位线的计算`currentWatermark = 当前观测到的最大事件时间 - 延迟时间 - 1ms`
+     ```java
+     @Override
+     public void onPeriodicEmit(WatermarkOutput output) {
+        output.emitWatermark(new Watermark(maxTimestamp - outOfOrdernessMillis - 1));
+     }
+     ```
+114. <mark>水位线代表了当前的事件时间时钟，而且可以在数据的时间戳基础上加一些延迟来保证窗口不丢数据</mark>
+115. <mark>水位线的特性：</mark>
      * 水位线是插入到数据流中的一个标记，可以认为是一个特殊的数据
      * 水位线主要的内容是一个时间戳，用来表示当前事件时间的进展
      * 水位线是基于数据的时间戳生成的
      * 水位线的时间戳必须单调递增，以确保任务的事件时间时钟一直向前推进
      * 水位线可以通过设置延迟，来保证正确处理乱序数据
      * 一个水位线Watermark(t)，表示当前流中事件时间已经达到了时间戳t，这代表t之前的所有数据都到齐了，之后流中不会出现时间戳t'<=t的数据
-109. 水位线是flink流处理中保证结果正确性的核心机制，它往往会和窗口一起配合，完成对乱序数据的正确处理
+116. 水位线是flink流处理中保证结果正确性的核心机制，它往往会和窗口一起配合，完成对乱序数据的正确处理 
+117. 完美的水位线表示一个水位线一旦出现，就表示这个时间之前的数据已经全部到齐、之后再也不会出现了。但是实际情况中，水位线是不能完美实现的，因为数据的传输延迟、节点故障、数据丢失等因素，都会导致水位线的不完美实现(比如：就算设置了等待时间，但是前一个窗口已经触发了，此时再来了一条本来属于前一个窗口的数据，此时这个数据是进不去前面窗口的，因为已经触发、关闭了（不考虑给窗口设置迟到时间的情况）)。
+     如果要保证绝对正确，就必须等足够长的时间，但这会带来更高的延迟。如果希望处理得更快、实时性更强，那么可以将水位线延迟设得低一些。这种情况下，可能很多迟到数据会在水位线之后才到达，就会导致窗口遗漏数据，计算结果不准确。
+     如果我们对准确性完全不考虑、一味地追求处理速度，可以直接使用处理时间语义，这在理论上可以得到最低的延迟。Flink中的水位线，其实是流处理中对低延迟和结果正确性的一个权衡机制
+118. <mark>使用事件时间语义，watermark才会起作用</mark>
+119. <mark>等待时间只会影响窗口的触发、关闭时间点，不会影响窗口内的数据范围构成</mark>
+120. 有序流水位线：只要在窗口已经触发后出现一条时间戳比之前小的乱序数据，这条乱序数据会直接被判定为迟到，该窗口不会接收，会直接丢弃；如果不想丢弃，可以配置测输出流
+     ```java
+     /**
+     * 指定WaterMark策略
+     */
+     // 定义watermark策略
+     WatermarkStrategy<WaterSensor> waterSensorWatermarkStrategy = WatermarkStrategy
+            // 升序watermark，没有等待时间，假设数据事件时间严格升序，完全不存在乱序；
+            // 每条数据到达后，当前水印直接更新为这条数据的事件时间。不是来一条数据就生成一条watermark数据，而按周期单独统计区间最大值，全程维护一个全局最大事件时间；每条数据实时更新这个最大值，每隔 200ms 把当前全局最大值封装成水印发送一次
+            .<WaterSensor>forMonotonousTimestamps()
+            // 指定时间戳分配器，从数据中提取。每条数据到来都会执行一次
+            .withTimestampAssigner(new SerializableTimestampAssigner<WaterSensor>() {
+                @Override
+                public long extractTimestamp(WaterSensor element, long recordTimestamp) {
+                    System.out.println("数据=" + element + ",recordTs=" + recordTimestamp);
+                    // 返回的时间戳，要毫秒
+                    return element.getTimestamp() * 1000L;
+                }
+            });
+     source.assignTimestampsAndWatermarks(waterSensorWatermarkStrategy);
+     ```
+     <mark>在一个窗口内，如果出现乱序数据，但是此时的数据还是在此窗口内，并且这个窗口还没有被触发，那么遇到该条数据时此时的watermark是不会推进的，此窗口是能接收这个数据的。比如：当前水位线=5，然后来了一条时间戳=3的数据，那么当前水位线还是=5，不会减到3，此时这条数据是接收到这个窗口内了</mark>
+     ![img.png](升序watermark.png)
+121. 乱序流水位线：
+    ![img.png](乱序流水位线.png)
+    <mark>需要注意：设置了延迟时间，会影响窗口触发、关闭的时间点，但是不会影响当前窗口内的数据处理，也就是如果一个滚动事件时间语义10s的窗口，那么就算设置了等待时间3s，那么事件时间为10s、11s、12s的数据不会进入[0,10)的第一个窗口的，只是说此时第一个窗口要在13s数据到来时才触发，
+            而不会改变窗口内的数据范围</mark>
+122. 自定义周期性水位线生成器：实现`onEvent`和`onPeriodicEmit`方法，其实就是仿造`BoundedOutOfOrdernessWatermarks`类。`env.getConfig().setAutoWatermarkInterval(200L);`用来指定水位线周期
+123. 自定义断点式水位器生成器（来一条数据就发射（生成）一条水位线数据）：断点式生成器会不停地检测`onEvent()`中的事件，当发现带有水位线信息的事件时，就立即发出水位线，因此把发射水位线的逻辑写在`onEvent()`方法中即可
+124. 对于`env.fromSource()`这类新型source注册方法可以直接在数据源处就抽取水位线，如：`DataStreamSource<String> kafkasource = env.fromSource(kafkaSource, WatermarkStrategy.forBoundedOutOfOrderness(Duration.ofSeconds(3)), "kafkasource");`，此时不用再调用`assignTimestampsAndWatermarks()`方法了，因为自动会从数据源中捕获TS字段作为事件时间，这时封装好的
+125. watermark在单并行度中是直接随着数据处理向前一起传递的（水位线也是数据）。对于多并行度水位线的传递：
+     * 上游可能因为不同节点网络延迟而传递的watermark不同，此时当前task以最小收到的watermark为准
+     * watermark和普通的数据不一样，普通的数据经过分区（比如：随机、轮询、键控等）只会进入一个子任务，而watermark会广播给所有需要输出的下游
+     ![img.png](多并行度水位线传递.png)
+     * 在多个上游并行任务中，如果有其中一个没有数据，由于当前task是以最小的那个作为当前任务的事件时钟，就会导致当前task的水位线无法推进，就可能导致窗口无法触发，此时可以设置空闲等待时间
