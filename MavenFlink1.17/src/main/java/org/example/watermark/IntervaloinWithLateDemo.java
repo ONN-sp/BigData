@@ -1,58 +1,63 @@
 package org.example.watermark;
 
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
-import org.apache.flink.api.common.functions.JoinFunction;
 import org.apache.flink.api.common.typeinfo.Types;
-import org.apache.flink.api.java.tuple.Tuple;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.Tuple3;
-import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.KeyedStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.co.ProcessJoinFunction;
-import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
-import org.example.bean.WaterSensor;
 
-public class IntervaloinDemo {
+import java.time.Duration;
+
+public class IntervaloinWithLateDemo {
     public static void main(String[] args) throws Exception {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(1);
         SingleOutputStreamOperator<Tuple2<String, Integer>> ds1 = env
-                .fromElements(
-                        Tuple2.of("a", 1),
-                        Tuple2.of("a", 2),
-                        Tuple2.of("b", 1),
-                        Tuple2.of("c", 1)
-                )
+                .socketTextStream("localhost", 7777)
+                .map(value -> {
+                    String[] fields = value.split(",");
+                    return Tuple2.of(fields[0], Integer.parseInt(fields[1]));
+                })
+                .returns(Types.TUPLE(Types.STRING, Types.INT))
                 .assignTimestampsAndWatermarks(WatermarkStrategy.
                         <Tuple2<String, Integer>>forMonotonousTimestamps()
                         .withTimestampAssigner((timestamp, record) -> timestamp.f1 * 1000L)
                 );
         SingleOutputStreamOperator<Tuple3<String, Integer, Integer>> ds2 = env
-                .fromElements(
-                        Tuple3.of("a", 1, 1),
-                        Tuple3.of("a", 11, 1),
-                        Tuple3.of("b", 2, 1),
-                        Tuple3.of("b", 12, 1),
-                        Tuple3.of("c", 14, 1),
-                        Tuple3.of("d", 15, 1)
-                )
+                .socketTextStream("localhost", 8888)
+                .map(value -> {
+                    String[] fields = value.split(",");
+                    return Tuple3.of(fields[0], Integer.parseInt(fields[1]), Integer.parseInt(fields[2]));
+                })
+                .returns(Types.TUPLE(Types.STRING, Types.INT, Types.INT))
                 .assignTimestampsAndWatermarks(WatermarkStrategy.
-                        <Tuple3<String, Integer, Integer>>forMonotonousTimestamps()
+                        <Tuple3<String, Integer, Integer>>forBoundedOutOfOrderness(Duration.ofSeconds(3))
                         .withTimestampAssigner((record, timestamp) -> record.f1 * 1000L)
                 );
         /**
          * Interval Join
+         * 1、只支持事件时间
+         * 2、指定上下界的偏移，负号表示时间往前
+         * 3、主流中只能处理join上的数据
+         * 4、和同一条流的多并行度类似，两条流关联后的watermark，以两条流中最小的为准
+         * 5、如果有迟到数据（当前数据的事件时间 < 当前watermark），则直接丢弃，主流的process不处理
+         *  => 可以在between后，指定将左流或右流的迟到数据放入测输出流
          */
         KeyedStream<Tuple2<String, Integer>, String> ks1 = ds1.keyBy(r1 -> r1.f0);
         KeyedStream<Tuple3<String, Integer, Integer>, String> ks2 = ds2.keyBy(r2 -> r2.f0);
+        OutputTag<Tuple2<String, Integer>> leftLateData = new OutputTag<>("left late data", Types.TUPLE(Types.STRING, Types.INT));
+        OutputTag<Tuple3<String, Integer, Integer>> rightLateData = new OutputTag<>("right late data", Types.TUPLE(Types.STRING, Types.INT, Types.INT));
         // 调用interval join
         SingleOutputStreamOperator<String> process = ks1.intervalJoin(ks2)
                 .between(Time.seconds(-2), Time.seconds(2))
+                .sideOutputLeftLateData(leftLateData)// 将ks1的迟到数据，放入测输出流
+                .sideOutputRightLateData(rightLateData)// 将ks2的迟到数据，放入测输出流
                 .process(new ProcessJoinFunction<Tuple2<String, Integer>, Tuple3<String, Integer, Integer>, String>() {
                     /**
                      * 两条流的数据匹配上，才会调用这个方法
@@ -69,6 +74,8 @@ public class IntervaloinDemo {
                     }
                 });
         process.print();
+        process.getSideOutput(leftLateData).printToErr();
+        process.getSideOutput(rightLateData).printToErr();
         env.execute();
     }
 }
