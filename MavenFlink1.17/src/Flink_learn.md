@@ -175,7 +175,7 @@
     Source subtask1：消费 partition 1、3
     同一个 kafka 分区的数据，永远固定由同一个 source 子任务读取
 60. <mark>算子链（这是一种优化措施）：将算子链接成task是非常有效的优化，可以减少线程之间的切换和基于缓存区的数据交换，在减少时延的同时提升吞吐量（在 Flink 中，Task 是一个阶段多个功能相同 subTask 的集合，Flink 会尽可能地将 operator 的 subtask 链接（chain）在一起形成 task。每个 task 在一个线程中执行。将 operators 链接成 task 是非常有效的优化：它能减少线程之间的切换，减少消息的序列化/反序列化，减少数据在缓冲区的交换，减少了延迟的同时提高整体的吞吐量。）</mark>
-    * Flink中算子串子一起的条件
+    * Flink中算子串在一起的条件
       * one to one
       * 并行度相同
     * <mark>Flink中，并行度相同的one to one算子操作，可以直接链接在一起形成一个”大“的任务，此时这两个算子操作是forward关系。这样原来的算子就称为了真正任务里的一部分。每个task会被一个线程执行，这样的技术就是算子链。比如下图：原来本来Source、map是4个子任务、2个任务，现在合并后变成了2个子任务，1个任务了</mark>
@@ -453,7 +453,7 @@
       keyStream.process(new KeyedProcessFunction<String, String, String>() {
       // 生命周期初始化（富函数能力）
          @Override
-          public void open(Configuration parameters) {
+          public void open(Configuration parameters) {// 一个子任务执行一次
             // 注册状态
             countState = getRuntimeContext().getState(new ValueStateDescriptor<>("cnt", Long.class));
           }
@@ -746,6 +746,7 @@
            System.out.println("getResult: " + accumulator);
            return accumulator.toString();
          }
+        // merge方法只有用到会话窗口才需要写，其余情况直接返回null就行
          @Override
          public Integer merge(Integer a, Integer b) {
            System.out.println("merge: " + a + " " + b);
@@ -964,6 +965,7 @@
                 countState = getRuntimeContext().getState(new ValueStateDescriptor<>("cnt", Long.class));
               }
               // 每条数据进来必执行的核心方法
+              // value表示输入数据的值
               @Override
               public void processElement(String value, Context ctx, Collector<String> out) throws Exception {
                 // 1. 获取当前key
@@ -1007,3 +1009,142 @@
      ![img.png](定时器去重.png)
      * 定时器去重不会对不同key的定时器进行去重，每个key的定时器是独立的
 137. TopN练习
+138. 在flink中，算子任务可以分为无状态和有状态两种情况：
+     * 无状态的算子任务只需要观察每个独立事件，根据当前输入的数据直接转换输出结果。比如：map、filter、flatMap
+     * 有状态的算子任务，则除当前数据之外，还需要一些其它数据来得到计算结果。这里的“其它数据”，就算所谓的状态，比如：聚合算子、窗口算子
+     ![img.png](有状态任务.png)
+139. <mark>状态的分类：</mark>
+     * 托管状态：由flink统一管理，状态的存储访问、故障恢复和重组等一系列问题都由flink实现，我们只需要调接口就行
+       * 算子状态（一般用在Source或Sink等与外部系统连接的算子上，或者完全没有key定义的场景，比如flink的kafka连接器中就用到了算子状态）：无key概念的状态。状态作用范围限定为当前的算子任务实例，也就是只对当前并行子任务实例有效。这就意味着对于一个并行子任务，占据了一个分区，它所处理的所有数据都会访问到相同的状态，状态对于同一子任务而言是共享的，每个子task维护独立的状态
+       ![img.png](算子状态.png)
+         * 列表状态：状态中保存的是一个列表，`ListState<T>`，每个并行子任务上只会保留一个List。当并行度进行缩放操作时，算子的列表状态中的所有元素项会被统一收集起来，然后再均匀地分配给所有并行任务。这种”均匀分配“的具体方法就算”轮询“
+         * 联合列表状态：和列表状态的不同仅在并行度进行缩放操作时不同，它不是轮询去分配，而是每个子任务都拿到完整的列表状态
+         * <mark>广播状态：算子子任务都保存同一份”全局“状态，用来做统一的配置和规则设定。这时所有子任务的所有数据都会访问到同一个状态</mark>
+           * 只有广播流才能对广播状态进行更新，数据流只能读取广播状态
+           * 可以将配置信息写到广播流中，可以实时更新广播状态，但是不需要重启程序就能对数据流产生影响（类似腾讯的七彩石）
+       * <mark>按键分区状态(`get`、`update`、`add`等操作的都是针对运行时数据对应的key分组的，不是其它分组)：经过keyby后的状态。状态根据输入流中定义的key来维护和访问的，所以只能定义在按键分区流中，也就是keyby后才可以使用。对于此状态，就算是同一个子任务的多个不同key的分组，它们也是独立维护自己的状态的，`lastValueState.value()`也是只会根据当前流入进来数据的key去相应状态组中去找状态值</mark>
+       ![img.png](按键分区状态.png)
+         * 值状态：状态中只保存一个值，`ValueState<T>`，管理状态代码步骤：
+           * 初始化状态，初始化状态描述器，需要在`open()`中`lastValueState = getRuntimeContext().getState(new ValueStateDescriptor<Integer>("lastValue", Integer.class))`
+           * 取出上一条状态值`lastValueState.value()`：这是根据当前流入进来数据的key去相应状态组中去找的上一条状态值
+           * 根据当前数据和上一条数据值执行相应逻辑
+           * 更新状态值`lastValueState.update(value.getValue())`
+           ```java
+           sensorKS.process(
+                new KeyedProcessFunction<String, WaterSensor, String>() {
+                    ValueState<Integer> lastValueState;
+                    @Override
+                    public void open(Configuration parameters) throws Exception {
+                        super.open(parameters);
+                        // 初始化状态
+                        // 状态描述器两个参数：第一个参数：起个名字，唯一不重复；第二个参数：存储的类型
+                        lastValueState = getRuntimeContext().getState(new ValueStateDescriptor<Integer>("lastValue", Integer.class));
+                    }
+                    @Override
+                    public void processElement(WaterSensor value, Context ctx, Collector<String> out) throws Exception {
+                        // 取出上一条的水位值
+                        int lastValue = lastValueState.value() == null ? 0 : lastValueState.value();// 取出值状态里的数据
+                        // 求差值的绝对值，判断是否超过10
+                        if (Math.abs(lastValue - value.getValue()) > 10) {
+                            out.collect("传感器=" + value.getId() + "，当前水位值=" + value.getValue() + "，与上一条水位值=" + lastValue + "，相差超过10！！！");
+                        }
+                        // 保存更新自己的水位值
+                        lastValueState.update(value.getValue());
+                    }
+                }
+           )
+           ```
+         * 列表状态：将需要保存的数据，以列表的形式组织起来，`ListState<T>`，管理状态代码步骤：
+           * 初始化状态，初始化状态描述器
+           * 取出上一条List类型状态值
+           * 根据当前数据和上一条List类型数据值执行相应逻辑
+           * 更新状态值
+           ```java
+           sensorKS.process(
+                new KeyedProcessFunction<String, WaterSensor, String>() {
+                    ListState<Integer> lastListState;
+                    @Override
+                    public void open(Configuration parameters) throws Exception {
+                        super.open(parameters);
+                        // 初始化状态
+                        // 状态描述器两个参数：第一个参数：起个名字，唯一不重复；第二个参数：存储的类型
+                        lastListState = getRuntimeContext().getListState(new ListStateDescriptor<>("lastListState", Types.INT));
+                    }
+                    @Override
+                    public void processElement(WaterSensor value, Context ctx, Collector<String> out) throws Exception {
+                        // 来一条数据，存到list状态里
+                        lastListState.add(value.getValue());
+                        // 从list状态拿出来，拷贝到一个list中，排序，取前3个，并且一直只保存三个
+                        Iterable<Integer> integers = lastListState.get();
+                        ArrayList<Integer> vcList = new ArrayList<>();
+                        for (Integer integer : integers)
+                            vcList.add(integer);
+                        vcList.sort((o1, o2) -> o2 - o1);
+                        if(vcList.size() > 3)
+                            vcList.remove(3);
+                        out.collect("传感器id=" + value.getValue() + ",最大的3个水位值=" + vcList.toString());
+                        // 更新list状态
+                        lastListState.update(vcList);
+                    }
+                }
+           )
+           ```
+         * Map状态：将需要保存的数据，以Map的形式组织起来，`MapState<K, V>`
+         * 归约状态：类似于值状态，不过需要对添加进来的所有数据进行归约，将归约聚合之后的值作为状态保存下来，`ReducingState<T>`，它保存的只是一个聚合值，调用`.add()`方法时，不是在状态列表里添加元素，而是直接把新数据和之前的状态进行归约(归约办法是在状态描述器中`ReduceFuction`中定义的)，并用得到的结果自动更新状态:
+           ```java
+           sensorKS.process(
+                new KeyedProcessFunction<String, WaterSensor, String>() {
+                    ReducingState<Integer> vcSumState;
+                    @Override
+                    public void open(Configuration parameters) throws Exception {
+                        super.open(parameters);
+                        // 初始化状态
+                        vcSumState = getRuntimeContext().getReducingState(new ReducingStateDescriptor<Integer>(
+                                "vcSumState",
+                                new ReduceFunction<Integer>() {
+                                    @Override
+                                    public Integer reduce(Integer value1, Integer value2) throws Exception {
+                                        return value1 + value2;
+                                    }
+                                },
+                                Types.INT));
+                    }
+                    @Override
+                    public void processElement(WaterSensor value, Context ctx, Collector<String> out) throws Exception {
+                        vcSumState.add(value.getValue());// 来一条数据，添加到reducing状态里
+                        out.collect("传感器=" + value.getId() + "，水位值总和=" + vcSumState.get());
+                    }
+                }
+           )
+           ```
+         * 聚合状态：和归约状态类似。与`ReduceState`不同的是，它的聚合逻辑是由在描述器中传入一个更加一般化的聚合函数`AggregateFunction`定义的;它的输入类型、中间聚合类型、输出类型可以不同，比归约状态更灵活（类似`aggregate`与`reduce`的区别）
+           * `.get()`：得到的是本组key对应的聚合状态的结果，而不是中间聚合结果，不是累加器结果
+           * `.add()`：向本组的聚合状态添加数据，会自动进行聚合
+           * `.clear()`：清空本组的聚合状态
+     * 原始状态：自定义的，相当于就算开辟了一块内存，需要自己关系，实现状态的序列化和故障恢复（很少用）
+140. 在实际应用中，很多状态会随着时间的推移逐渐增长，如果不加以限制，最终会导致存储空间的耗尽，这时可以给状态在内存中配置一个”生存时间“，当存在的时间超过这个值时就将他清除。
+     状态创建的时候，设置失效时间=当前时间+TTL；之后如果有对状态的访问和修改，可以再对失效时间进行更新；当设置的清除条件被触发时（状态被访问或每隔一段时间扫描一次失效状态），就可以判断状态是否失效
+141. <mark>配置状态的TTL时，需要创建一个`StateTtlConfig`配置对象，然后调用状态描述器的`.enableTinmeToLive()`方法启动TTL功能</mark>
+     ```java
+     StateTtlConfig ttlConfig = StateTtlConfig
+             .newBuilder(Time.seconds(5))
+             .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
+             .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
+             .build();
+     ```
+     * `.newBuilder()`：状态TTL配置的构造器方法，必须调用，返回一个Builder之后再调用`.build()`方法就可以得到`StateTtlConfig`了。方法需要传入一个Time作为参数，这就是设定的状态生存时间
+     * `.setUpdateType()`：设置更新类型。更新类型指定了什么时候更新状态失效时间，这里的`OnCreateAndWrite`表示只有创建状态和更改状态（写操作）时更新失效时间，即写操作，都会自动重置 TTL 计时，生命周期重新从当前时间开始算。另一种类型`OnReadAndWrite`则表示无论读写操作都会更新失效时间，也就是只要对状态进行了访问，就会延长生存时间，默认是`OnCreateAndWrite`
+     * `.setStateVisibility()`：设置状态的可见性。这里的可见性是指因为清除操作不是实时的，所以当状态过期之后还有可能继续存在，这时如果对它进行访问，能否正常读取到就算一个问题了。`NeverReturnExpired`是默认行为，表示从不返回过期值，也就是只要过期就认为已经被清除了，应用不能读取；`ReturnExpireDefNotCleanedUp`就算如果过期状态还存在，就返回它的值
+     * 初始化状态描述器，需要在`open()`中；因此TTL配置也要写在`open()`中
+     * TTL用的是 处理时间，机器系统时钟推进的
+142. <mark>在flink中，状态的存储、访问以及维护，都是由一个可插拔的组件决定的，这个组件就叫做状态后端。状态后端主要负责管理本地状态的存储方式和位置（比如存内存还是磁盘）</mark>
+     * 哈希表状态后端（默认使用的就是这个）`HashMapStateBackend`：把状态放在内存里。具体实现上，哈希表状态后端在内部会直接把状态当作对象，保存在Taskmanager的JVM堆上
+     * 内嵌RocksDB状态后端(`EmbeddedRocksDBStateBackend`)：是一种内嵌的key-value存储介质，可以把数据持久化到本地硬盘。配置`EmbeddedRocksDBStateBackend`后，会将处理中的数据全部放入RocksDB数据库中，RocksDB默认存储在Taskmanager的本地数据目录中（磁盘）。
+       RocksDB的状态数据被存储为序列化的字节数组，读写操作需要序列化/反序列化，因此状态的访问性要差一些
+     * 状态后端的正确选择：
+       * `HashMapStateBackend`是内存计算，读写速度很快；但是，状态的大小会受到集群可用内存的限制，受到TM的内存资源限制
+       * `EmbeddedRocksDBStateBackend`是硬盘存储，所有可用根据可用磁盘空间进行扩展，它非常适合于超级海量状态的存储。不过由于每个状态的读写都需要做序列化/反序列化，而且可能需要直接交互磁盘，性能较低。其备份是用到增量保存的方式
+     * 状态后端的配置：
+       * 配置默认的状态后端：在flink-conf.yaml中，使用`state.backend`来配置
+        ![img.png](配置状态后端.png)
+       * 为每个作业(per-job/application)单独配置状态后端：`env.setStateBackend(new HashMapStateBackend());`；也可以命令行提交时指定
