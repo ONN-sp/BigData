@@ -55,6 +55,12 @@
       <artifactId>flink-connector-jdbc</artifactId>
     </dependency>
 
+    <!-- Hadoop 核心依赖（从父工程继承版本） -->
+    <dependency>
+    <groupId>org.apache.hadoop</groupId>
+    <artifactId>hadoop-client</artifactId>
+    </dependency>
+
     <!-- MySQL 核心依赖（从父工程继承版本） -->
     <dependency>
       <groupId>mysql</groupId>
