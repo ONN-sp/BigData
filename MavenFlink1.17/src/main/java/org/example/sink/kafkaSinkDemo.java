@@ -33,7 +33,7 @@ public class kafkaSinkDemo {
                 // 写到kafka的一致性级别：精准一次，至少一次。如果是精确一次，必须设置事务的前缀
                 .setDeliveryGuarantee(DeliveryGuarantee.EXACTLY_ONCE)// 精准一次
                 .setTransactionalIdPrefix("bytedance-")
-                // 如果是精准一次，必须设置事务的超时时间
+                // 如果是精准一次，必须设置事务的超时时间，需要大于checkpoint间隔
                 .setProperty(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, 10*60*1000+"")
                 .build();
         localhost.print("socket-data>>>");

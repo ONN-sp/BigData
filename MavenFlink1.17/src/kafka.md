@@ -41,7 +41,7 @@
    * acks=all或acks=-1:等待leader/follwer均确认，才返回成功（可靠性最高，但是延迟会增加，吞吐下降）
 9. 消费者组的不同消费者是可以并行的
 10. 一般消费就是：一个消费者组里的消费者各自独占若干个分区去串行消费消息，单个消费者消费分区是串行的，但是不同消费者消费不同分区时是并行的
-11. <mark>kafka的Sequence Number（序列号）：Sequence Number 是生产给每一条消息分配的单调递增本地序列号，由生产者自己维护，不是 broker 生成，broker生成的是partition的offset。每个生产者客户端（KafkaProducer）针对同一个主题分区维护一个单调递增的 sequence 序列号，用来实现幂等生产者 Idempotent Producer，解决重复发送消息问题</mark>
+11. <mark>kafka的Sequence Number（序列号）：Sequence Number 是生产者给每一条消息分配的单调递增本地序列号，由生产者自己维护，不是 broker 生成，broker生成的是partition的offset。每个生产者客户端（KafkaProducer）针对同一个主题分区维护一个单调递增的 sequence 序列号，用来实现幂等生产者 Idempotent Producer，解决重复发送消息问题</mark>
 12. <mark>Kafka 幂等生产者完全由生产者端开启，Broker 只做配合校验。生产者幂等性只能解决：同一生产者、同一分区、重试发同一条消息 → 去重</mark>
 13. <mark>一条消息要实现幂等去重，靠 3 个标识联合判断：</mark>
      * PID（Producer ID）：TC 分配给 transactional.id 的生产者/broker分配PID（非事务）
@@ -111,3 +111,6 @@
 18. kafka事务的局限：
     * 事务机制涉及额外的协调和日志写入（__transaction_state），会增加延迟和资源消耗
     * 建议在需要强一致性的场景中使用，避免滥用
+19. kafka的隔离级别：
+    * read_uncommitted（默认）：可以读到脏数据（未提交、待回滚的消息），适用于无事务、追求低延迟
+    * read_committed：仅读取已提交事务数据，适用于事务输出、精准一次业务
